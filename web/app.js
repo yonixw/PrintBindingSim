@@ -336,20 +336,48 @@ $('#imgup').onchange = async (e) => {
     setBar('#upbar', 1, 'Upload failed: ' + err.message);
   }
 };
+/** In-page dialog. Resolves true for Yes, false for No / Esc / backdrop. no=null → single OK button. */
+function ask({ title, text, yes = 'Yes', no = 'No', danger = false }) {
+  const m = $('#modal'), yesB = m.querySelector('.yes'), noB = m.querySelector('.no');
+  m.querySelector('h3').textContent = title;
+  m.querySelector('p').textContent = text;
+  yesB.textContent = yes;
+  yesB.classList.toggle('danger', danger);
+  noB.textContent = no || '';
+  noB.classList.toggle('hide', !no);
+  m.classList.remove('hide');
+  (danger ? noB : yesB).focus();
+  return new Promise((resolve) => {
+    const done = (v) => {
+      m.classList.add('hide');
+      m.onclick = yesB.onclick = noB.onclick = m.onkeydown = null;
+      resolve(v);
+    };
+    yesB.onclick = () => done(true);
+    noB.onclick = () => done(false);
+    m.onclick = (e) => { if (e.target === m) done(false); };
+    m.onkeydown = (e) => { if (e.key === 'Escape') done(false); };
+  });
+}
 $('#clearall').onclick = async () => {
   try {
     const s = await (await fetch('/api/data-summary')).json();
-    if (!s.imageFolders && !s.pdfs) { alert('Nothing to clear: img/ and pdf/ are already empty.'); return; }
+    if (!s.imageFolders && !s.pdfs) { await ask({ title: 'Nothing to clear', text: 'img/ and pdf/ are already empty.', yes: 'OK', no: null }); return; }
     const what = [s.imageFolders && `${s.imageFolders} image folder${s.imageFolders > 1 ? 's' : ''} (img/)`, s.pdfs && `${s.pdfs} PDF${s.pdfs > 1 ? 's' : ''} (pdf/)`].filter(Boolean).join(' and ');
-    if (!confirm(`Permanently delete ${what} from the server's data folder?
+    const ok = await ask({
+      title: 'Clear all data?',
+      text: `Permanently delete ${what} from the server's data folder.
 
-Other files in the data folder are not touched. This cannot be undone.`)) return;
+Other files in the data folder are not touched. This cannot be undone.`,
+      yes: 'Yes, delete', no: 'No', danger: true,
+    });
+    if (!ok) return;
     const r = await fetch('/api/clear', { method: 'POST' });
     if (!r.ok) throw new Error((await r.json()).error);
     if (book3d) { book3d.dispose(); book3d = null; }
     state.source = null;
     await loadFolders();
-  } catch (err) { alert('Clear failed: ' + err.message); }
+  } catch (err) { ask({ title: 'Clear failed', text: err.message, yes: 'OK', no: null }); }
 };
 let progressTimer = null;
 function watchProgress() {
