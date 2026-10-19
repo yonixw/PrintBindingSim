@@ -1,0 +1,8 @@
+# Sample page images
+_tmp_/
+# Server thumbnail / settings cache (local runs)
+.cache/
+# three.js, downloaded during the Docker build
+web/vendor/
+__pycache__/
+.claude/

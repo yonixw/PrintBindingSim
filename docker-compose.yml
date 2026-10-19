@@ -1,0 +1,16 @@
+services:
+  printbindingsim:
+    build: .
+    image: printbindingsim
+    ports:
+      - "${PORT:-8080}:8080"
+    volumes:
+      # Folder that contains your page-image folders (each subfolder = one print job).
+      # Override with:  BOOKS_DIR=D:/my/jobs docker compose up
+      - "${BOOKS_DIR:-.}:/data:ro"
+      - pbs-cache:/cache
+    environment:
+      - QUIET=1
+
+volumes:
+  pbs-cache:

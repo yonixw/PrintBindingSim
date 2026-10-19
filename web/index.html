@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Print Binding Sim</title>
+<link rel="stylesheet" href="style.css">
+<script type="importmap">
+{ "imports": { "three": "./vendor/three.module.js", "three/addons/": "./vendor/addons/" } }
+</script>
+</head>
+<body>
+<aside id="panel">
+  <h1>Print Binding Sim</h1>
+
+  <div class="pipe">
+    <section class="step">
+      <header><span class="num">0</span><h2>Pages</h2></header>
+      <label>Folder <select id="folder"></select></label>
+      <div class="row">
+        <button id="reload" title="Rescan the folder">Rescan</button>
+        <label class="filebtn">Open local folder…<input id="localdir" type="file" webkitdirectory multiple hidden></label>
+      </div>
+      <label>Preset <select id="preset"><option value="">— start from a preset —</option></select></label>
+      <div class="out" id="out0"></div>
+    </section>
+
+    <section class="step">
+      <header><span class="num">1</span><h2>Image</h2></header>
+      <div class="field"><span class="lbl">Rotate image (applied first)</span>
+        <div class="seg" data-k="rotate"><button value="0">0°</button><button value="90">90° ↻</button><button value="180">180°</button><button value="270">90° ↺</button></div></div>
+      <div class="field"><span class="lbl">Each image holds</span>
+        <div class="seg" data-ui="pages"><button value="one">One page</button><button value="two">Two pages</button></div></div>
+      <div class="field when-two"><span class="lbl">Split between the two pages</span>
+        <div class="seg" data-k="split"><button value="vertical">Left | Right</button><button value="horizontal">Top / Bottom</button></div></div>
+      <div class="out" id="out1"></div>
+    </section>
+
+    <section class="step">
+      <header><span class="num">2</span><h2>Two-sided printing</h2></header>
+      <div class="field"><span class="lbl">Sides</span>
+        <div class="seg" data-k="duplex"><button value="true">Both sides</button><button value="false">One side</button></div></div>
+      <div class="field when-duplex"><span class="lbl">Printer flips on the</span>
+        <div class="seg" data-k="flip"><button value="long">Long edge</button><button value="short">Short edge</button></div></div>
+      <label>Paper <select data-k="paper" id="paper"><option value="auto">Auto (match image aspect)</option></select></label>
+      <div class="out" id="out2"></div>
+    </section>
+
+    <section class="step">
+      <header><span class="num">3</span><h2>Assemble</h2></header>
+      <div class="when-one muted">One page per side: the printed sheets are simply stacked in print order.</div>
+      <div class="field when-two"><span class="lbl">Turn sheets into pages by</span>
+        <div class="seg" data-ui="assemble"><button value="fold">Folding (booklet)</button><button value="cut">Cutting in half</button></div></div>
+      <label class="when-fold">Sheets per signature <input data-k="sheetsPerSignature" type="number" min="0" value="0"><span class="muted">0 = all sheets nested into one booklet · 1 = each sheet folded on its own, then stacked</span></label>
+      <label class="when-cut">After cutting the stack <select data-k="cutOrder"><option value="book">Lay both half-stacks open like a book, then close it</option><option value="stack">Put one half-stack on top of the other</option><option value="sheet">Keep the two halves of each sheet together</option></select></label>
+      <div class="field when-cutfirst"><span class="lbl">Which half comes first (on top)</span>
+        <div class="seg" data-k="cutFirst" id="cutFirst"></div></div>
+      <div class="out" id="out3"></div>
+    </section>
+
+    <section class="step">
+      <header><span class="num">4</span><h2>Cover</h2></header>
+      <div class="field"><span class="lbl">The first and last printed pages are</span>
+        <div class="seg" data-k="cover"><button value="pages">The covers</button><button value="separate">Inside a separate cover</button></div></div>
+      <label class="when-separate">Blank pages between cover and first page <span class="muted">(same at the back)</span>
+        <select data-k="coverBlanks">
+          <option value="1">1 — just the inside of the cover</option>
+          <option value="3">3 — inside of cover + 1 blank leaf</option>
+          <option value="5">5 — inside of cover + 2 blank leaves</option>
+          <option value="7">7 — inside of cover + 3 blank leaves</option>
+          <option value="9">9 — inside of cover + 4 blank leaves</option>
+        </select>
+        <span class="muted">Always odd: your printed leaves can't be split, so page 1 stays on the front of a leaf and two-page images stay facing each other.</span></label>
+      <div class="out" id="out4c"></div>
+    </section>
+
+    <section class="step">
+      <header><span class="num">5</span><h2>Spine</h2></header>
+      <div class="field"><span class="lbl">Bound on the</span>
+        <div class="seg" data-k="binding" id="binding"><button value="left" title="Reads left to right">Left</button><button value="right" title="Reads right to left (manga)">Right</button><button value="top" title="Flips up, like a calendar">Top</button><button value="bottom">Bottom</button></div></div>
+      <label>Paper thickness (mm) <input data-k="thickness" type="number" min="0.02" max="3" step="0.02" value="0.1"></label>
+      <div class="out" id="out4"></div>
+    </section>
+
+    <section class="step result">
+      <header><span class="num">✓</span><h2>Result</h2></header>
+      <div id="summary" class="muted"></div>
+      <div id="warnings"></div>
+    </section>
+  </div>
+</aside>
+
+<main>
+  <nav id="tabs">
+    <button data-view="v3d" class="on">3D book</button>
+    <button data-view="vspreads">All spreads</button>
+    <button data-view="vsheets">Printer sheets</button>
+    <span class="grow"></span>
+    <span id="loadstat" class="muted"></span>
+  </nav>
+  <div id="views">
+    <div id="v3d" class="view on">
+      <div id="hud"></div>
+      <div id="help" class="muted">Drag: rotate · Right-drag: pan · Wheel: zoom · Click page / ← →: flip</div>
+    </div>
+    <div id="vspreads" class="view grid"></div>
+    <div id="vsheets" class="view grid"></div>
+  </div>
+  <footer id="nav">
+    <button id="first" title="Front cover (Home)">⏮</button>
+    <button id="prev" title="Previous (←)">◀</button>
+    <input id="slider" type="range" min="0" max="0" value="0">
+    <button id="next" title="Next (→)">▶</button>
+    <button id="last" title="Back cover (End)">⏭</button>
+    <span id="pos"></span>
+    <span class="grow"></span>
+    <label>View
+      <select id="camview"><option value="angled">Angled</option><option value="top">Top (flat)</option><option value="back">Back</option></select>
+    </label>
+    <label>Load pages
+      <select id="preload"><option value="window">As I flip (nearby only)</option><option value="all">All at once (thumbnails)</option></select>
+    </label>
+  </footer>
+</main>
+<script type="module" src="app.js"></script>
+</body>
+</html>

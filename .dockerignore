@@ -1,0 +1,7 @@
+_tmp_
+web/vendor
+**/__pycache__
+*.md
+.git
+.cache
+.claude
