@@ -22,6 +22,20 @@ export class Book3D {
     r.outputColorSpace = THREE.SRGBColorSpace;
     container.appendChild(r.domElement);
 
+    // Software rendering (no GPU: SwiftShader, llvmpipe, Microsoft Basic Render / WARP):
+    // use the 1600 px images for the open pages and skip their mipmaps, ~3x less CPU per
+    // page. Force with ?software=1 / ?software=0 in the URL.
+    this.rendererName = '';
+    try {
+      const gl = r.getContext();
+      const ext = gl.getExtension('WEBGL_debug_renderer_info');
+      this.rendererName = String(gl.getParameter(ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER) || '');
+    } catch { /* unknown */ }
+    const force = new URLSearchParams(location.search).get('software');
+    this.software = force !== null ? force === '1' : /swiftshader|llvmpipe|softpipe|software|basic render|warp/i.test(this.rendererName);
+    this.uploads = []; // decoded images waiting to be uploaded to the renderer
+    this.dir = 1;      // last reading direction, for prefetching ahead
+
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x2b2f36);
     this.camera = new THREE.PerspectiveCamera(35, 1, 5, 20000);
@@ -319,6 +333,7 @@ export class Book3D {
     target = Math.max(0, Math.min(N, Math.round(target)));
     if (target === this.cur && !animate) return;
     const from = this.cur;
+    if (target !== from) this.dir = target > from ? 1 : -1;
     this.cur = target;
     this._updateSpine();
     const now = performance.now();
@@ -394,6 +409,14 @@ export class Book3D {
       }
       if (done) { this._updateBlocks(); this._updateTextures(); }
     }
+    // At most one texture upload per frame. Thumbnails may go any time (cheap, and they
+    // replace grey placeholders); full-res pages only while no page is turning, so a flip
+    // never stalls on an upload.
+    if (this.uploads.length) {
+      let idx = this.uploads.findIndex((u) => u.level === 'lo');
+      if (idx < 0 && !this.anims.size) idx = 0;
+      if (idx >= 0) this._upload(this.uploads.splice(idx, 1)[0]);
+    }
     // Draw only when something changed (camera, pages, textures): idle costs ~nothing,
     // which matters with software rendering on GPU-less machines.
     const moved = this.controls.update();
@@ -418,22 +441,26 @@ export class Book3D {
 
   _updateTextures() {
     if (!this.book) return;
-    const L = this.book.leaves, N = L.length, c = this.cur;
-    const wantFull = this._imgsOfLeaves(c - 2, c + 1);
+    const L = this.book.leaves, N = L.length, c = this.cur, fwd = this.dir >= 0;
+    // Full resolution: the open spread plus more pages in the reading direction
+    // (2 leaves behind, 4 ahead), prepared while you read.
+    const wantFull = fwd ? this._imgsOfLeaves(c - 2, c + 4) : this._imgsOfLeaves(c - 5, c + 1);
     for (const k of this.anims.keys()) for (const i of this._imgsOfLeaves(k, k)) wantFull.add(i);
     let wantLo;
     if (this.opts.preload === 'all') wantLo = this._imgsOfLeaves(0, N - 1);
     else {
-      wantLo = this._imgsOfLeaves(c - this.opts.loWindow, c + this.opts.loWindow);
+      const w = this.opts.loWindow;
+      wantLo = fwd ? this._imgsOfLeaves(c - w, c + w + 4) : this._imgsOfLeaves(c - w - 4, c + w);
       for (const i of this._imgsOfLeaves(0, 0)) wantLo.add(i);          // front cover
       for (const i of this._imgsOfLeaves(N - 1, N - 1)) wantLo.add(i);  // back cover
     }
     this._sync('full', wantFull);
     this._sync('lo', wantLo);
-    // Load order: nearest first
-    const order = [...wantLo].sort((x, y) => Math.abs(this._imgLeaf(x) - c) - Math.abs(this._imgLeaf(y) - c));
-    for (const i of wantFull) this._ensure(i, 'full');
-    for (const i of order) this._ensure(i, 'lo');
+    // Load order: nearest first, ties going to the reading direction
+    const centre = c + (fwd ? 0.5 : -0.5);
+    const near = (set) => [...set].sort((x, y) => Math.abs(this._imgLeaf(x) - centre) - Math.abs(this._imgLeaf(y) - centre));
+    for (const i of near(wantFull)) this._ensure(i, 'full');
+    for (const i of near(wantLo)) this._ensure(i, 'lo');
   }
 
   _imgLeaf(img) {
@@ -459,20 +486,30 @@ export class Book3D {
     const m = this.tex[level];
     if (m.has(i)) return;
     m.set(i, 'pending');
-    this.source.get(i, level).then((im) => {
+    const fetchLevel = level === 'full' && this.software ? 'mid' : level;
+    this.source.get(i, fetchLevel).then((im) => {
       if (m.get(i) !== 'pending') return; // no longer wanted
-      const t = new THREE.Texture(im);
-      t.colorSpace = THREE.SRGBColorSpace;
-      if (typeof ImageBitmap !== 'undefined' && im instanceof ImageBitmap) {
-        t.flipY = false; t.repeat.set(1, -1); t.offset.set(0, 1);
-      }
-      t.anisotropy = level === 'full' ? this.renderer.capabilities.getMaxAnisotropy() : 4;
-      t.generateMipmaps = true;
-      t.minFilter = THREE.LinearMipmapLinearFilter;
-      t.needsUpdate = true;
-      m.set(i, t);
-      this._refreshMat(i);
+      this.uploads.push({ i, level, im });
     }).catch(() => m.delete(i));
+  }
+
+  _upload({ i, level, im }) {
+    const m = this.tex[level];
+    if (m.get(i) !== 'pending') return; // dropped while queued
+    const t = new THREE.Texture(im);
+    t.colorSpace = THREE.SRGBColorSpace;
+    if (typeof ImageBitmap !== 'undefined' && im instanceof ImageBitmap) {
+      t.flipY = false; t.repeat.set(1, -1); t.offset.set(0, 1);
+    }
+    const big = level === 'full';
+    t.anisotropy = big ? this.renderer.capabilities.getMaxAnisotropy() : 4;
+    // Mipmaps are costly to build on the CPU; skip them for big pages in software mode.
+    t.generateMipmaps = !(big && this.software);
+    t.minFilter = t.generateMipmaps ? THREE.LinearMipmapLinearFilter : THREE.LinearFilter;
+    t.needsUpdate = true;
+    m.set(i, t);
+    this.renderer.initTexture(t); // upload now, in this frame, not later in the middle of a flip
+    this._refreshMat(i);
   }
 
   _refreshMat(i) {
@@ -494,6 +531,6 @@ export class Book3D {
     let lo = 0, full = 0;
     for (const t of this.tex.lo.values()) if (t !== 'pending') lo++;
     for (const t of this.tex.full.values()) if (t !== 'pending') full++;
-    return { lo, full };
+    return { lo, full, queued: this.uploads.length, software: this.software, renderer: this.rendererName };
   }
 }

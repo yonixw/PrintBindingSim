@@ -5,7 +5,8 @@ import { spineFrame, pageNumber } from './binding.js';
 export function drawFace(ctx, book, face, im, sgn, cx, cy, sc) {
   const { a, d } = spineFrame(book.binding);
   const { Ls, Lt } = book;
-  const iw = im.width, ih = im.height;
+  // A blank page (no image) still gets its white page shape; any size works for the math.
+  const iw = im ? im.width : 1, ih = im ? im.height : 1;
   // canvas from (sN,tN)
   const oc = [cx - a[0] * Lt / 2 * sc, cy + a[1] * Lt / 2 * sc];
   const e1c = [sgn * Ls * sc * d[0], -sgn * Ls * sc * d[1]];

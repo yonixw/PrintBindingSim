@@ -274,7 +274,8 @@ window.addEventListener('keydown', (e) => {
 setInterval(() => {
   if (!book3d) return;
   const s = book3d.stats();
-  $('#loadstat').textContent = `GPU textures: ${s.full} full-res, ${s.lo} thumbnails`;
+  $('#loadstat').textContent = `${s.software ? 'Software rendering (no GPU) · ' : ''}textures: ${s.full} full-res, ${s.lo} thumbnails${s.queued ? `, ${s.queued} queued` : ''}`;
+  $('#loadstat').title = s.renderer;
 }, 500);
 
 // ---------- sources ----------

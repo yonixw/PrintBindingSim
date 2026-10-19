@@ -2,6 +2,16 @@
 // for an index at a level: 'lo' (thumbnail, ~512px) or 'full'.
 
 const LO_SIZE = 512;
+const MID_SIZE = 1600;
+
+// Decode off the main thread: fetch the bytes and let createImageBitmap decode them in the
+// background (an <img> can decode on the main thread at upload time and stall animations).
+async function loadBitmap(url) {
+  if (typeof createImageBitmap !== 'function') return loadImg(url);
+  const r = await fetch(url);
+  if (!r.ok) throw new Error('failed to load ' + url);
+  return createImageBitmap(await r.blob());
+}
 
 function loadImg(url) {
   return new Promise((res, rej) => {
@@ -15,8 +25,8 @@ function loadImg(url) {
 
 class BaseSource {
   constructor() {
-    this.cache = { lo: new Map(), full: new Map() };
-    this.fullLimit = 24; // keep at most this many full-res images decoded
+    this.cache = { lo: new Map(), mid: new Map(), full: new Map() };
+    this.fullLimit = 24; // keep at most this many large (mid/full) images decoded
     this.blur = 0;
   }
   /** Change blur strength; drops every cached image. Returns true if it changed. */
@@ -24,7 +34,7 @@ class BaseSource {
     b = Math.max(0, Math.min(100, +b || 0));
     if (b === this.blur) return false;
     this.blur = b;
-    this.cache = { lo: new Map(), full: new Map() };
+    this.cache = { lo: new Map(), mid: new Map(), full: new Map() };
     return true;
   }
   get(i, level) {
@@ -36,7 +46,7 @@ class BaseSource {
     }
     const p = this._load(i, level).catch((e) => { c.delete(i); throw e; });
     c.set(i, p);
-    if (level === 'full') {
+    if (level !== 'lo') {
       while (c.size > this.fullLimit) {
         // Drop the oldest; it may still be referenced by a live texture, so no close().
         c.delete(c.keys().next().value);
@@ -61,7 +71,7 @@ export class ServerSource extends BaseSource {
     const rel = (this.path ? this.path + '/' : '') + this.images[i].name;
     return `/api/image?path=${encodeURIComponent(rel)}&size=${level}${blur}`;
   }
-  _load(i, level) { return loadImg(this.url(i, level)); }
+  _load(i, level) { return loadBitmap(this.url(i, level)); }
   /** Ask the server to pre-render (blurred) versions of every file. */
   warm() { fetch(`/api/warm?path=${encodeURIComponent(this.path)}&blur=${this.blur}`).catch(() => {}); }
 }
@@ -90,10 +100,10 @@ export class LocalSource extends BaseSource {
   warm() {}
   async _load(i, level) {
     const f = this.files[i];
-    if (this.blur > 0) return this._blurred(f, level === 'full' ? 1600 : LO_SIZE);
+    if (this.blur > 0) return this._blurred(f, level === 'lo' ? LO_SIZE : MID_SIZE);
     if (level === 'full') return createImageBitmap(f);
     const bm = await createImageBitmap(f);
-    const k = LO_SIZE / Math.max(bm.width, bm.height);
+    const k = (level === 'mid' ? MID_SIZE : LO_SIZE) / Math.max(bm.width, bm.height);
     if (k >= 1) return bm;
     const out = await createImageBitmap(bm, { resizeWidth: Math.round(bm.width * k), resizeHeight: Math.round(bm.height * k), resizeQuality: 'high' });
     bm.close();
