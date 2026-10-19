@@ -109,6 +109,7 @@ export class Book3D {
     this.group.position.copy(this.a3).multiplyScalar(-book.Lt / 2);
     this.cur = keepSpread ? Math.min(prev, N) : 0;
     this.anims.clear();
+    this._updateSpine();
     for (let k = 0; k < N; k++) this._setTheta(k, k < this.cur ? Math.PI : 0);
     this._updateBlocks();
     this._updateTextures();
@@ -124,6 +125,7 @@ export class Book3D {
     }
     this.group.remove(this.rightBlock, this.leftBlock);
     this.rightBlock.geometry.dispose();
+    this.leftBlock.geometry.dispose();
     this.leafObjs = null;
   }
 
@@ -180,16 +182,36 @@ export class Book3D {
     return m.map ? m : this.loadingMat;
   }
 
+  // All leaves hinge on one spine line at height spineZ, so the two facing pages always
+  // meet there. Near the spine (the gutter, width G) each resting leaf bends from its
+  // stack height to spineZ, like the pages of a real open book.
+  _updateSpine() {
+    const N = this.leafObjs.length, th = this.th, c = this.cur;
+    const topR = c < N ? (N - c - 0.5) * th : 0; // center height of the top resting leaf, right
+    const topL = c > 0 ? (c - 0.5) * th : 0;
+    this.spineZ = Math.max(topR, topL, th / 2);
+    const dz = Math.abs(topR - topL);
+    this.G = Math.min(0.45 * this.book.Ls, Math.max(0.06 * this.book.Ls, 4 * dz));
+  }
+  // 1 at the spine, easing to 0 at the end of the gutter
+  _gutter(u) {
+    if (u >= this.G) return 0;
+    const x = u / this.G;
+    return 1 - x * x * (3 - 2 * x);
+  }
+
   // Position the vertices of leaf k for turn angle theta (0 = resting right, PI = turned).
   _setTheta(k, theta, dir = 1) {
     const o = this.leafObjs[k];
-    if (o.theta === theta && !this.anims.has(k)) return;
-    o.theta = theta;
+    if (o.theta === theta && o.spineZ === this.spineZ && o.G === this.G && !this.anims.has(k)) return;
+    o.theta = theta; o.spineZ = this.spineZ; o.G = this.G;
     const { Ls, Lt } = this.book;
     const N = this.leafObjs.length, th = this.th;
     const zR = (N - 1 - k) * th + th / 2, zL = k * th + th / 2;
-    const f = theta / Math.PI;
-    const hingeZ = zR + (zL - zR) * f;
+    const hingeZ = this.spineZ;
+    // How much each resting shape applies: fully at rest, none when the leaf stands upright.
+    const cR = Math.max(0, Math.cos(theta)) ** 2, cL = Math.max(0, -Math.cos(theta)) ** 2;
+    const dropR = (zR - hingeZ) * cR, dropL = (zL - hingeZ) * cL;
     const bend = -dir * CURL * Math.sin(theta);
     const a = this.a3, d = this.d3;
     const pr = o.rec.geometry.attributes.position.array;
@@ -212,7 +234,7 @@ export class Book3D {
           const ox = px + nx * th * sgn, oz = pz + nz * th * sgn;
           arr[vi] = a.x * t + d.x * ox;
           arr[vi + 1] = a.y * t + d.y * ox;
-          arr[vi + 2] = hingeZ + oz;
+          arr[vi + 2] = hingeZ + oz + (dropR + dropL) * (1 - this._gutter(i * ds));
         }
       }
     }
@@ -242,22 +264,41 @@ export class Book3D {
       if (!vis && o.theta === 0 && k === N - 1) vis = true; // back cover, bottom of right stack
       if (!vis && o.theta === Math.PI && k === 0) vis = true; // front cover, bottom of left stack
       o.rec.visible = o.ver.visible = vis;
+      if (vis && !this.anims.has(k) && o.theta >= 0) this._setTheta(k, o.theta);
     }
     const inset = 0.15;
+    // The page block of a stack: flat on top, rising/dipping to the spine in the gutter
+    // exactly like its leaves, so the stack edges stay under the visible page.
     const place = (mesh, count, side) => {
       mesh.visible = count > 0;
       if (!count) return;
-      const h = Math.max(0.001, (count - 1) * th);
-      // block spans t in [inset, Lt-inset], s in [inset, Ls-inset] on the given side
-      const dd = this.d3.clone().multiplyScalar(side);
-      const m = new THREE.Matrix4().makeBasis(
-        this.a3.clone().multiplyScalar(Lt - 2 * inset),
-        dd.multiplyScalar(Ls - 2 * inset),
-        new THREE.Vector3(0, 0, h));
-      m.setPosition(this.a3.x * inset + this.d3.x * side * inset, this.a3.y * inset + this.d3.y * side * inset, th * 0.5);
-      mesh.matrixAutoUpdate = false;
-      mesh.matrix.copy(m);
-      // makeBasis with a mirrored frame flips winding; edge material is double-sided-safe:
+      const top = (count - 0.5) * th - th * 0.5, bottom = th * 0.5;
+      const zAt = (u) => Math.max(bottom, top + (this.spineZ - th * 0.5 - top) * this._gutter(u));
+      const a = this.a3, d = this.d3.clone().multiplyScalar(side);
+      const pos = [];
+      const P = (u, t, z) => [a.x * t + d.x * u, a.y * t + d.y * u, z];
+      const quad = (p0, p1, p2, p3) => pos.push(...p0, ...p1, ...p2, ...p0, ...p2, ...p3);
+      const t0 = inset, t1 = Lt - inset;
+      for (let i = 0; i < SEG; i++) {
+        const u0 = inset + (Ls - 2 * inset) * i / SEG, u1 = inset + (Ls - 2 * inset) * (i + 1) / SEG;
+        const z0 = zAt(u0), z1 = zAt(u1);
+        quad(P(u0, t0, z0), P(u1, t0, z1), P(u1, t1, z1), P(u0, t1, z0));                 // top
+        quad(P(u0, t0, bottom), P(u1, t0, bottom), P(u1, t0, z1), P(u0, t0, z0));         // side t0
+        quad(P(u0, t1, bottom), P(u1, t1, bottom), P(u1, t1, z1), P(u0, t1, z0));         // side t1
+        quad(P(u0, t0, bottom), P(u1, t0, bottom), P(u1, t1, bottom), P(u0, t1, bottom)); // bottom
+      }
+      const ue = Ls - inset, ze = zAt(ue);
+      quad(P(ue, t0, bottom), P(ue, t1, bottom), P(ue, t1, ze), P(ue, t0, ze));             // fore edge
+      const us = inset, zs = zAt(us);
+      quad(P(us, t0, bottom), P(us, t1, bottom), P(us, t1, zs), P(us, t0, zs));             // spine side
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      g.computeVertexNormals();
+      mesh.geometry.dispose();
+      mesh.geometry = g;
+      mesh.matrixAutoUpdate = true;
+      mesh.matrix.identity();
+      mesh.position.set(0, 0, 0);
       mesh.material.side = THREE.DoubleSide;
     };
     place(this.rightBlock, right, 1);
@@ -273,6 +314,7 @@ export class Book3D {
     if (target === this.cur && !animate) return;
     const from = this.cur;
     this.cur = target;
+    this._updateSpine();
     const now = performance.now();
     const ks = [];
     if (target > from) for (let k = from; k < target; k++) ks.push(k);
