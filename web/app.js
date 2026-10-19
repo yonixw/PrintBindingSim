@@ -514,5 +514,7 @@ $('#localdir').onchange = async (e) => {
   await useSource(src, 'local:' + dir, null);
 };
 
+// Debug handle for the browser console: __pbs.book3d, __pbs.state
+window.__pbs = { get book3d() { return book3d; }, state };
 if (!HAS_WEBGL) noWebGL();
 loadFolders();

@@ -213,8 +213,15 @@ export function buildBook(images, settings) {
       // Affine fit from 3 points
       const p = (sN, tN) => { const [x, y] = toSheet(sN * Ls, tN * Lt); return uvAt(side, x, y); };
       const o = p(0, 0), ps = p(1, 0), pt = p(0, 1);
+      // Name the half by where it is in the image file (what you see when you open it),
+      // not by the sheet's front: on the back side left and right are swapped.
+      let part = label;
+      if (label !== 'whole') {
+        const cu = (ps[0] + pt[0]) / 2, cv = (ps[1] + pt[1]) / 2; // uv at the page centre (sN = tN = 0.5)
+        part = (Math.abs(cu - 0.5) >= Math.abs(cv - 0.5) ? (cu < 0.5 ? 'left' : 'right') : (cv > 0.5 ? 'top' : 'bottom')) + ' half';
+      }
       return {
-        img, sheet: sheet.index, side, part: label,
+        img, sheet: sheet.index, side, part,
         // uv = o + sN*(ps-o) + tN*(pt-o)
         o, ds: [ps[0] - o[0], ps[1] - o[1]], dt: [pt[0] - o[0], pt[1] - o[1]],
       };
