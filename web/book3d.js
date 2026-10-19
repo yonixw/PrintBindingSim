@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { faceUV, spineFrame } from './binding.js';
 import { labelCanvas } from './views2d.js';
+import { buildScenery, disposeGroup } from './scenery.js';
 
 const SEG = 28;          // segments across a leaf (for the page curl)
 const CURL = 0.65;       // how much the free edge lags while turning
@@ -33,6 +34,8 @@ export class Book3D {
     } catch { /* unknown */ }
     const force = new URLSearchParams(location.search).get('software');
     this.software = force !== null ? force === '1' : /swiftshader|llvmpipe|softpipe|software|basic render|warp/i.test(this.rendererName);
+    this.theme = this.opts.theme || 'none';
+    this.viewZoom = Math.max(0.3, Math.min(5, +new URLSearchParams(location.search).get('zoom') || 1)); // ?zoom=1.5 starts further out
     this.uploads = []; // decoded images waiting to be uploaded to the renderer
     this.dir = 1;      // last reading direction, for prefetching ahead
 
@@ -73,6 +76,7 @@ export class Book3D {
     this.renderer.setAnimationLoop(null);
     this._ro.disconnect();
     this._clearBook();
+    if (this.scenery) disposeGroup(this.scenery);
     for (const lvl of ['lo', 'full']) for (const t of this.tex[lvl].values()) t !== 'pending' && t.dispose();
     for (const m of this.mats.values()) m.dispose();
     this.renderer.dispose();
@@ -128,6 +132,7 @@ export class Book3D {
     for (let k = 0; k < N; k++) this._setTheta(k, k < this.cur ? Math.PI : 0);
     this._updateBlocks();
     this._updateTextures();
+    if (!sameShape || !this.scenery) this._buildScenery();
     if (!keepSpread || !sameShape) this.resetView();
     this.onChange(this.cur);
   }
@@ -325,6 +330,27 @@ export class Book3D {
     place(this.leftBlock, left, -1);
   }
 
+  // ---------- scenery (themed table) ----------
+  setTheme(name) {
+    this.theme = name;
+    this._buildScenery();
+  }
+
+  _buildScenery() {
+    if (!this.book) return;
+    if (this.scenery) { this.scene.remove(this.scenery); disposeGroup(this.scenery); this.scenery = null; }
+    const { Ls, Lt } = this.book;
+    const ext = {
+      w: Math.abs(this.a3.x) * Lt + Math.abs(this.d3.x) * 2 * Ls,
+      h: Math.abs(this.a3.y) * Lt + Math.abs(this.d3.y) * 2 * Ls,
+    };
+    const s = buildScenery(this.theme, ext);
+    if (s.group) { this.scenery = s.group; this.scene.add(s.group); }
+    this.scene.background.set(s.bg);
+    this.scene.fog = s.fog ? new THREE.Fog(s.fog[0], s.fog[1], s.fog[2]) : null;
+    this.dirty = true;
+  }
+
   // ---------- navigation ----------
   get leafCount() { return this.leafObjs ? this.leafObjs.length : 0; }
 
@@ -366,7 +392,7 @@ export class Book3D {
     const w = Math.abs(this.a3.x) * Lt + Math.abs(this.d3.x) * 2 * Ls;
     const h = Math.abs(this.a3.y) * Lt + Math.abs(this.d3.y) * 2 * Ls;
     const tanH = Math.tan((this.camera.fov * Math.PI) / 360);
-    const dist = Math.max(h / 2 / tanH, w / 2 / (tanH * this.camera.aspect)) * 1.12;
+    const dist = Math.max(h / 2 / tanH, w / 2 / (tanH * this.camera.aspect)) * 1.12 * this.viewZoom;
     this.controls.target.set(0, 0, 0);
     if (kind === 'top') this.camera.position.set(0, 0.001, dist);
     else if (kind === 'back') this.camera.position.set(0, 0.001, -dist);
@@ -420,6 +446,8 @@ export class Book3D {
     // Draw only when something changed (camera, pages, textures): idle costs ~nothing,
     // which matters with software rendering on GPU-less machines.
     const moved = this.controls.update();
+    // Looking from under the table (e.g. the "Back" view): hide the table, show the book.
+    if (this.scenery) this.scenery.visible = this.camera.position.z > 0;
     if (moved || this.dirty || this.anims.size) {
       this.renderer.render(this.scene, this.camera);
       this.dirty = false;

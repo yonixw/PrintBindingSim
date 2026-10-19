@@ -12,7 +12,7 @@
 <body>
 <aside id="panel">
   <h1>Print Binding Sim</h1>
-  <div class="version" title="App version and release date">v1.0.0 · 2026-10-19</div>
+  <a class="version" href="https://github.com/yonixw/PrintBindingSim" target="_blank" rel="noopener" title="Source code and releases on GitHub">v1.0.0 · 2026-10-19 · GitHub ↗</a>
 
   <div class="pipe">
     <section class="step">
@@ -65,6 +65,7 @@
       <label class="when-cut">After cutting the stack <select data-k="cutOrder"><option value="book">Lay both half-stacks open like a book, then close it</option><option value="stack">Put one half-stack on top of the other</option><option value="sheet">Keep the two halves of each sheet together</option></select></label>
       <div class="field when-cutfirst"><span class="lbl">Which half comes first (on top)</span>
         <div class="seg" data-k="cutFirst" id="cutFirst"></div></div>
+      <div class="explain" id="explain3"></div>
       <div class="out" id="out3"></div>
     </section>
 
@@ -132,6 +133,9 @@
     <button id="last" title="Back cover (End)">⏭</button>
     <span id="pos"></span>
     <span class="grow"></span>
+    <label>Scene
+      <select id="scene"></select>
+    </label>
     <label>View
       <select id="camview"><option value="angled">Angled</option><option value="top">Top (flat)</option><option value="back">Back</option></select>
     </label>

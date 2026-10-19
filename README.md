@@ -7,11 +7,17 @@ Preview how a folder of page images will look once printed and bound, before you
 * **3D book**: rotate it with the mouse, click pages (or use the arrow keys) to flip them with a curl animation.
 * **All spreads**: every spread drawn at once from thumbnails. Click one to open it in 3D.
 * **Printer sheets**: the raw sheet fronts and backs as they come out of the printer.
+* **Step-by-step settings**, top to bottom. The Assemble step says in plain words how to fold or cut and stack your sheets, and where each printed sheet's halves end up (e.g. *sheet 1 → p1, p2 … p55, p56*).
+* **Scenes**: a low-poly table under the book: pirate sheep captain, wizard library, cyberpunk, fairy forest, or none.
+
+![The four scenes](docs/scenes.jpg)
+
+URL options, handy for links: `?theme=pirate|library|cyber|fairy|none`, `?spread=12` (open at a spread), `?zoom=1.5` (start further out), `?software=1|0` (force software-rendering mode on or off).
 
 ## Run: portable app (no install, no Docker)
 
 Download `PrintBindingSim-windows-x64.zip` or `PrintBindingSim-linux-x64.tar.gz` from the [Releases](https://github.com/yonixw/PrintBindingSim/releases), unpack it anywhere, and run `PrintBindingSim.exe` (Windows) or `./PrintBindingSim` (Linux).
-Your browser opens at http://localhost:8080; close the console window to stop.
+Your default browser opens the app on a random free port, and the console window shows the address. Close the console window to stop.
 
 * Nothing is installed, no admin rights are needed, and nothing is unpacked to temp. Everything lives in that folder:
   `_internal/` (Python, Pillow, PDFium, the web app) and `data/` (your uploads and the cache), created on first run.

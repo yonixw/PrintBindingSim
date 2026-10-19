@@ -104,3 +104,9 @@ h1:has(+ .version) { margin-bottom: 2px; }
 .no3d h3 { margin: 0 0 8px; font-size: 15px; }
 .no3d p { margin: 8px 0; color: var(--muted); }
 .no3d code { display: inline-block; padding: 2px 6px; border-radius: 5px; background: #1b1e23; border: 1px solid var(--line); color: var(--fg); }
+a.version { display: block; text-decoration: none; }
+a.version:hover { color: var(--accent); opacity: 1; }
+
+.explain p { margin: 8px 0 6px; font-size: 12px; line-height: 1.45; color: var(--fg); opacity: .9; }
+.explain .map { font-size: 11.5px; line-height: 1.55; padding: 6px 8px; border-radius: 7px; background: #1b1e23; border: 1px solid var(--line); }
+.explain .map b { color: var(--accent); font-weight: 600; }

@@ -1,5 +1,6 @@
-import { buildBook, DEFAULT_SETTINGS, PRESETS, PAPER_SIZES, allowedBindings, halfNames, migrateSettings, coverBlanksOdd } from './binding.js';
+import { buildBook, DEFAULT_SETTINGS, PRESETS, PAPER_SIZES, allowedBindings, halfNames, migrateSettings, coverBlanksOdd, pageNumber } from './binding.js';
 import { Book3D } from './book3d.js';
+import { THEMES } from './scenery.js';
 import { SpreadsView, SheetsView, describeFace } from './views2d.js';
 import { fetchFolders, openServerFolder, LocalSource, loadServerSettings, saveServerSettings, uploadPdf, fetchProgress, uploadImageFolder } from './source.js';
 
@@ -141,7 +142,7 @@ function rebuild(keepSpread) {
   state.book = book;
   if (!book3d && HAS_WEBGL) {
     try {
-      book3d = new Book3D($('#v3d'), state.source, { preload: $('#preload').value });
+      book3d = new Book3D($('#v3d'), state.source, { preload: $('#preload').value, theme: $('#scene').value });
       book3d.onChange = updatePos;
     } catch (e) {
       console.error(e);
@@ -191,6 +192,7 @@ function summarize(book) {
   } else {
     $('#out4c').textContent = `→ your first page is the front cover, your last page is the back cover`;
   }
+  explainAssembly(book);
   const reads = { left: 'reads left → right', right: 'reads right → left', top: 'flips up', bottom: 'flips down' }[book.binding];
   $('#out4').textContent = `→ ${pageW}×${pageH} mm pages, ${reads}, ≈${(N * s.thickness).toFixed(1)} mm thick`;
 
@@ -215,6 +217,56 @@ function summarize(book) {
   $('#warnings').innerHTML = warns.length
     ? warns.map(([c, t]) => `<div class="${c}">${t}</div>`).join('')
     : '<div class="ok">✓ No problems detected</div>';
+}
+
+// Step 3: say in plain words how to physically assemble the sheets, then show where the
+// pages of the first sheets end up (computed from the real imposition, so it is exact).
+function explainAssembly(book) {
+  const s = book.settings;
+  const nSheets = book.sheets.length;
+  const content = book.leaves.filter((l) => !l.synthetic);
+  const firstHalf = (content[0]?.part || '').split(' ')[0];
+  const [h1, h2] = halfNames(book.split);
+  const otherHalf = firstHalf === h1 ? h2 : h1;
+  const line = book.split === 'vertical' ? 'vertical (left | right)' : 'horizontal (top / bottom)';
+  let how;
+  if (book.layout === 'single') {
+    how = `Stack the ${nSheets} sheets in print order (sheet 1 on top) and bind them on the ${book.binding} edge.`;
+  } else if (book.layout === 'fold') {
+    const n = s.sheetsPerSignature;
+    if (!n || n >= nSheets) {
+      how = `Stack all ${nSheets} sheets in print order, sheet 1 on the outside, and fold the whole stack in half on the ${line} line (fronts facing out). ` +
+        `Staple at the fold. Sheet 1 becomes the outermost sheet, so it holds the first two and the last two pages; the middle sheet is the centre spread.`;
+    } else if (n === 1) {
+      how = `Fold every sheet in half on its own on the ${line} line (front facing out), then stack the folded sheets in order, sheet 1 first. Each sheet gives 4 pages in a row.`;
+    } else {
+      how = `Make booklets of ${n} sheets each: stack ${n} sheets (the first one outside), fold them together on the ${line} line, then stack the booklets in order and bind them.`;
+    }
+  } else if (s.cutOrder === 'book') {
+    how = `Cut the whole stack on the ${line} line. Lay the two half-stacks side by side like an open book, then close it: the ${firstHalf} half-stack stays as the front, and the ${otherHalf} half-stack is flipped over onto its back. ` +
+      `This gives the same page order as a folded booklet, but with loose leaves, so glue or clip the spine.`;
+  } else if (s.cutOrder === 'stack') {
+    how = `Cut the whole stack on the ${line} line, then put the ${firstHalf} half-stack on top of the ${otherHalf} half-stack, without flipping anything.`;
+  } else {
+    how = `Cut each sheet on the ${line} line and keep its halves together: the ${firstHalf} half first, then the ${otherHalf} half, sheet after sheet.`;
+  }
+  // sheet -> its pages
+  const bySheet = new Map();
+  book.leaves.forEach((l, k) => {
+    for (const [face, verso] of [[l.recto, false], [l.verso, true]]) {
+      if (face.sheet < 0) continue;
+      const half = book.layout === 'single' ? '' : ' ' + l.part.split(' ')[0];
+      if (!bySheet.has(face.sheet)) bySheet.set(face.sheet, []);
+      bySheet.get(face.sheet).push({ p: pageNumber(k, verso), what: face.side + half });
+    }
+  });
+  const show = [...new Set([0, 1, 2, nSheets - 1])].filter((j) => j >= 0 && j < nSheets);
+  const rows = show.map((j, idx) => {
+    const pages = (bySheet.get(j) || []).sort((a, b) => a.p - b.p).map((x) => `<b>p${x.p}</b> ${x.what}`).join(' · ');
+    const gap = idx > 0 && j - show[idx - 1] > 1 ? '<div class="muted">…</div>' : '';
+    return `${gap}<div>Sheet ${j + 1}: ${pages}</div>`;
+  }).join('');
+  $('#explain3').innerHTML = `<p>${how}</p><div class="map"><div class="muted">Where each printed sheet ends up:</div>${rows}</div>`;
 }
 
 function updatePos(cur) {
@@ -259,6 +311,18 @@ $('#first').onclick = () => book3d && book3d.goTo(0);
 $('#last').onclick = () => book3d && book3d.goTo(book3d.leafCount);
 $('#slider').oninput = (e) => book3d && book3d.goTo(+e.target.value);
 $('#camview').onchange = (e) => book3d && book3d.resetView(e.target.value);
+// Themed table under the book. URL ?theme=pirate|library|cyber|fairy|none overrides.
+{
+  const urlTheme = new URLSearchParams(location.search).get('theme');
+  let saved = null;
+  try { saved = localStorage.getItem('pbs.theme'); } catch { /* ignore */ }
+  for (const [k, v] of Object.entries(THEMES)) $('#scene').insertAdjacentHTML('beforeend', `<option value="${k}">${v}</option>`);
+  $('#scene').value = THEMES[urlTheme] ? urlTheme : THEMES[saved] ? saved : 'library';
+  $('#scene').onchange = (e) => {
+    try { localStorage.setItem('pbs.theme', e.target.value); } catch { /* ignore */ }
+    if (book3d) book3d.setTheme(e.target.value);
+  };
+}
 $('#preload').onchange = (e) => book3d && book3d.setPreload(e.target.value);
 window.addEventListener('keydown', (e) => {
   if (!book3d || state.view !== 'v3d' || /INPUT|SELECT/.test(document.activeElement.tagName) && document.activeElement.type !== 'range') return;
@@ -292,6 +356,9 @@ async function useSource(src, key, serverSettings) {
   if (book3d) { book3d.dispose(); book3d = null; }
   applyBlur();
   rebuild(false);
+  // URL ?spread=N opens that spread (handy for links and screenshots)
+  const sp = new URLSearchParams(location.search).get('spread');
+  if (sp !== null && book3d && !state.spreadFromUrl) { state.spreadFromUrl = true; book3d.goTo(+sp, false); }
 }
 
 async function openFolder(path) {

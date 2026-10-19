@@ -4,7 +4,7 @@ Dependencies besides the stdlib: Pillow, and pypdfium2 for PDFs.
   DATA_DIR   folder containing your page-image folders and PDFs
              (default /data; portable build: ./data next to the executable)
   CACHE_DIR  thumbnail + settings cache (default /cache; portable: <DATA_DIR>/.cache)
-  PORT       default 8080 (portable build: the next free port if 8080 is taken)
+  PORT       default 8080 (portable build: a random free port unless PORT is set)
   NO_BROWSER set to 1 to not open a browser on start (portable build only)
 
 A PDF is treated like a folder of images: page i is image i. Pages are rendered on
@@ -446,14 +446,11 @@ mimetypes.add_type("text/css", ".css")
 
 def make_server():
     ThreadingHTTPServer.daemon_threads = True
-    # Portable: if the port is taken (e.g. a second copy), use the next free one.
-    for port in range(PORT, PORT + (20 if FROZEN else 1)):
-        try:
-            return ThreadingHTTPServer(("0.0.0.0", port), Handler), port
-        except OSError:
-            if port == PORT + (19 if FROZEN else 0):
-                raise
-    raise OSError("no free port")
+    # Portable: let the OS pick a random free port (no clashes, several copies can run),
+    # unless PORT is set. Docker/dev: fixed PORT, since the port mapping needs it.
+    port = 0 if FROZEN and "PORT" not in os.environ else PORT
+    httpd = ThreadingHTTPServer(("0.0.0.0", port), Handler)
+    return httpd, httpd.server_address[1]
 
 
 if __name__ == "__main__":
