@@ -2,6 +2,8 @@
 
 Preview how a folder of page images will look once printed and bound, before you pay for the print run.
 
+![Print Binding Sim: settings pipeline on the left, 3D book on the right](docs/screenshot.jpg)
+
 * **3D book**: rotate it with the mouse, click pages (or use the arrow keys) to flip them with a curl animation.
 * **All spreads**: every spread drawn at once from thumbnails. Click one to open it in 3D.
 * **Printer sheets**: the raw sheet fronts and backs as they come out of the printer.
@@ -53,3 +55,7 @@ You need Python 3.10+ with Pillow, plus `web/vendor/` with three.js r169 (`three
 ```bash
 DATA_DIR=. CACHE_DIR=.cache python server/server.py
 ```
+
+## License
+
+[MIT](LICENSE)
