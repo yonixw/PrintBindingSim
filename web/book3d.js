@@ -183,13 +183,14 @@ export class Book3D {
   }
 
   // All leaves hinge on one spine line at height spineZ, so the two facing pages always
-  // meet there. Near the spine (the gutter, width G) each resting leaf bends from its
-  // stack height to spineZ, like the pages of a real open book.
+  // meet there. The spine sits at the top of the thinner stack; the top page of the
+  // thicker stack curves down through the gutter (width G) to meet it, like a real open
+  // book. Pages under the top one (incl. the covers at the bottom) stay flat.
   _updateSpine() {
     const N = this.leafObjs.length, th = this.th, c = this.cur;
     const topR = c < N ? (N - c - 0.5) * th : 0; // center height of the top resting leaf, right
     const topL = c > 0 ? (c - 0.5) * th : 0;
-    this.spineZ = Math.max(topR, topL, th / 2);
+    this.spineZ = c > 0 && c < N ? Math.min(topR, topL) : Math.max(topR, topL, th / 2);
     const dz = Math.abs(topR - topL);
     this.G = Math.min(0.45 * this.book.Ls, Math.max(0.06 * this.book.Ls, 4 * dz));
   }
@@ -203,8 +204,9 @@ export class Book3D {
   // Position the vertices of leaf k for turn angle theta (0 = resting right, PI = turned).
   _setTheta(k, theta, dir = 1) {
     const o = this.leafObjs[k];
-    if (o.theta === theta && o.spineZ === this.spineZ && o.G === this.G && !this.anims.has(k)) return;
-    o.theta = theta; o.spineZ = this.spineZ; o.G = this.G;
+    const bends = !!o.isTop || this.anims.has(k); // only the visible top page follows the gutter
+    if (o.theta === theta && o.spineZ === this.spineZ && o.G === this.G && o.bends === bends && !this.anims.has(k)) return;
+    o.theta = theta; o.spineZ = this.spineZ; o.G = this.G; o.bends = bends;
     const { Ls, Lt } = this.book;
     const N = this.leafObjs.length, th = this.th;
     const zR = (N - 1 - k) * th + th / 2, zL = k * th + th / 2;
@@ -234,7 +236,7 @@ export class Book3D {
           const ox = px + nx * th * sgn, oz = pz + nz * th * sgn;
           arr[vi] = a.x * t + d.x * ox;
           arr[vi + 1] = a.y * t + d.y * ox;
-          arr[vi + 2] = hingeZ + oz + (dropR + dropL) * (1 - this._gutter(i * ds));
+          arr[vi + 2] = hingeZ + oz + (dropR + dropL) * (bends ? 1 - this._gutter(i * ds) : 1);
         }
       }
     }
@@ -264,6 +266,7 @@ export class Book3D {
       if (!vis && o.theta === 0 && k === N - 1) vis = true; // back cover, bottom of right stack
       if (!vis && o.theta === Math.PI && k === 0) vis = true; // front cover, bottom of left stack
       o.rec.visible = o.ver.visible = vis;
+      o.isTop = k === topRight || k === topLeft;
       if (vis && !this.anims.has(k) && o.theta >= 0) this._setTheta(k, o.theta);
     }
     const inset = 0.15;
