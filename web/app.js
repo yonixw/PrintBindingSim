@@ -1,7 +1,7 @@
 import { buildBook, DEFAULT_SETTINGS, PRESETS, PAPER_SIZES, allowedBindings, halfNames, migrateSettings, coverBlanksOdd } from './binding.js';
 import { Book3D } from './book3d.js';
 import { SpreadsView, SheetsView, describeFace } from './views2d.js';
-import { fetchFolders, openServerFolder, LocalSource, loadServerSettings, saveServerSettings } from './source.js';
+import { fetchFolders, openServerFolder, LocalSource, loadServerSettings, saveServerSettings, uploadPdf, fetchProgress, uploadImageFolder } from './source.js';
 
 const $ = (s) => document.querySelector(s);
 const state = { source: null, book: null, settings: { ...DEFAULT_SETTINGS }, view: 'v3d', folderKey: null };
@@ -83,6 +83,7 @@ function applyBlur() {
   $('#blurval').textContent = b ? `— ${b}` : '— off';
   if (!state.source || !state.source.setBlur(b)) return false;
   state.source.warm();
+  watchProgress();
   return true;
 }
 // Drop every texture (they were made from the old images), keeping the open spread.
@@ -260,7 +261,7 @@ async function useSource(src, key, serverSettings) {
   if (!saved) { try { saved = JSON.parse(localStorage.getItem('pbs.settings.' + key) || 'null'); } catch { saved = null; } }
   state.settings = { ...DEFAULT_SETTINGS, ...(migrateSettings(saved) || {}) };
   writeForm(state.settings);
-  $('#out0').textContent = `${src.images.length} images in ${src.label}`;
+  $('#out0').textContent = `${src.images.length} ${src.kind === 'pdf' ? 'pages' : 'images'} in ${src.label}`;
   if (book3d) book3d.source = src;
   // drop textures from a previous source
   if (book3d) { book3d.dispose(); book3d = null; }
@@ -275,6 +276,7 @@ async function openFolder(path) {
     const saved = await loadServerSettings(path);
     localStorage.setItem('pbs.folder', path);
     await useSource(src, 'srv:' + path, saved);
+    watchProgress();
   } catch (e) { $('#out0').textContent = 'Error: ' + e.message; }
 }
 
@@ -283,7 +285,10 @@ async function loadFolders(selectPath) {
     const { folders, root } = await fetchFolders();
     const sel = $('#folder');
     sel.innerHTML = folders.length ? '' : '<option value="">(no image folders found)</option>';
-    for (const f of folders) sel.insertAdjacentHTML('beforeend', `<option value="${f.path}">${f.path || '(root)'} — ${f.count} images</option>`);
+    for (const f of folders) {
+      const label = f.kind === 'pdf' ? `📄 ${f.path} — ${f.error ? 'unreadable' : f.count + ' pages'}` : `📁 ${f.path || '(root)'} — ${f.count} images`;
+      sel.insertAdjacentHTML('beforeend', `<option value="${f.path}">${label}</option>`);
+    }
     sel.title = 'Server data folder: ' + root;
     const want = selectPath ?? localStorage.getItem('pbs.folder');
     const pick = folders.find((f) => f.path === want) || folders[0];
@@ -293,6 +298,75 @@ async function loadFolders(selectPath) {
   }
 }
 $('#folder').onchange = (e) => openFolder(e.target.value);
+
+// ---------- PDF upload + background preparation progress ----------
+function setBar(id, frac, text) {
+  const el = $(id);
+  el.classList.toggle('hide', frac === null);
+  if (frac === null) return;
+  el.firstElementChild.style.width = Math.round(frac * 100) + '%';
+  el.lastElementChild.textContent = text;
+}
+$('#pdfup').onchange = async (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+  const mb = (n) => (n / 1048576).toFixed(0);
+  try {
+    setBar('#upbar', 0, 'Uploading…');
+    const r = await uploadPdf(file, (l, t) => setBar('#upbar', l / t, l < t ? `Uploading ${mb(l)} / ${mb(t)} MB` : 'Reading PDF…'));
+    setBar('#upbar', null);
+    await loadFolders(r.path);
+  } catch (err) {
+    setBar('#upbar', 1, 'Upload failed: ' + err.message);
+  }
+};
+$('#imgup').onchange = async (e) => {
+  const all = [...e.target.files];
+  e.target.value = '';
+  const files = all.filter((f) => /\.(png|jpe?g|webp|bmp|gif|tiff?)$/i.test(f.name) && f.webkitRelativePath.split('/').length === 2);
+  if (!files.length) { setBar('#upbar', 1, 'No images found in the top level of that folder'); return; }
+  const folder = (files[0].webkitRelativePath || 'images').split('/')[0];
+  try {
+    setBar('#upbar', 0, 'Uploading images…');
+    const path = await uploadImageFolder(folder, files, (d, t) => setBar('#upbar', d / t, `Uploading images ${d} / ${t}`));
+    setBar('#upbar', null);
+    await loadFolders(path);
+  } catch (err) {
+    setBar('#upbar', 1, 'Upload failed: ' + err.message);
+  }
+};
+$('#clearall').onclick = async () => {
+  try {
+    const s = await (await fetch('/api/data-summary')).json();
+    if (!s.imageFolders && !s.pdfs) { alert('Nothing to clear: img/ and pdf/ are already empty.'); return; }
+    const what = [s.imageFolders && `${s.imageFolders} image folder${s.imageFolders > 1 ? 's' : ''} (img/)`, s.pdfs && `${s.pdfs} PDF${s.pdfs > 1 ? 's' : ''} (pdf/)`].filter(Boolean).join(' and ');
+    if (!confirm(`Permanently delete ${what} from the server's data folder?
+
+Other files in the data folder are not touched. This cannot be undone.`)) return;
+    const r = await fetch('/api/clear', { method: 'POST' });
+    if (!r.ok) throw new Error((await r.json()).error);
+    if (book3d) { book3d.dispose(); book3d = null; }
+    state.source = null;
+    await loadFolders();
+  } catch (err) { alert('Clear failed: ' + err.message); }
+};
+let progressTimer = null;
+function watchProgress() {
+  clearTimeout(progressTimer);
+  const src = state.source;
+  if (!src || src.path === undefined) { setBar('#prepbar', null); return; }
+  const tick = async () => {
+    if (state.source !== src) return;
+    try {
+      const { done, total } = await fetchProgress(src.path);
+      if (!total || done >= total) { setBar('#prepbar', null); return; }
+      setBar('#prepbar', done / total, `Preparing ${src.kind === 'pdf' ? 'pages' : 'thumbnails'} ${done} / ${total}`);
+    } catch { /* server busy */ }
+    progressTimer = setTimeout(tick, 800);
+  };
+  progressTimer = setTimeout(tick, 300);
+}
 $('#reload').onclick = () => loadFolders($('#folder').value);
 $('#localdir').onchange = async (e) => {
   if (!e.target.files.length) return;

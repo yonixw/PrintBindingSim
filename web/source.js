@@ -48,15 +48,18 @@ class BaseSource {
 }
 
 export class ServerSource extends BaseSource {
-  constructor(path, images) {
+  constructor(path, images, kind = 'folder') {
     super();
     this.path = path;
     this.images = images;
+    this.kind = kind; // 'folder' of images, or 'pdf' (image i = page i)
     this.label = path || '(root)';
   }
   url(i, level) {
+    const blur = this.blur ? '&blur=' + this.blur : '';
+    if (this.kind === 'pdf') return `/api/image?path=${encodeURIComponent(this.path)}&page=${i}&size=${level}${blur}`;
     const rel = (this.path ? this.path + '/' : '') + this.images[i].name;
-    return `/api/image?path=${encodeURIComponent(rel)}&size=${level}${this.blur ? '&blur=' + this.blur : ''}`;
+    return `/api/image?path=${encodeURIComponent(rel)}&size=${level}${blur}`;
   }
   _load(i, level) { return loadImg(this.url(i, level)); }
   /** Ask the server to pre-render (blurred) versions of every file. */
@@ -121,7 +124,47 @@ export async function openServerFolder(path) {
   const r = await fetch('/api/folder?path=' + encodeURIComponent(path));
   const j = await r.json();
   if (!r.ok) throw new Error(j.error || 'failed');
-  return new ServerSource(path, j.images);
+  return new ServerSource(path, j.images, j.kind);
+}
+
+/** Upload a PDF into the data folder's pdf/ subfolder. onProgress(loaded, total). */
+export function uploadPdf(file, onProgress) {
+  return new Promise((res, rej) => {
+    const x = new XMLHttpRequest();
+    x.open('POST', '/api/upload?name=' + encodeURIComponent(file.name));
+    x.upload.onprogress = (e) => onProgress(e.loaded, e.total);
+    x.onload = () => {
+      let j = {};
+      try { j = JSON.parse(x.responseText); } catch { /* ignore */ }
+      x.status === 200 ? res(j) : rej(new Error(j.error || 'upload failed'));
+    };
+    x.onerror = () => rej(new Error('upload failed'));
+    x.send(file);
+  });
+}
+
+/** Upload an image folder (from a folder picker) to img/<folder>/ on the server. */
+export async function uploadImageFolder(folder, files, onProgress) {
+  let r = await fetch('/api/upload-images/begin?folder=' + encodeURIComponent(folder), { method: 'POST' });
+  const begin = await r.json();
+  if (!r.ok) throw new Error(begin.error || 'upload failed');
+  let done = 0, next = 0;
+  const one = async () => {
+    while (next < files.length) {
+      const f = files[next++];
+      const q = `folder=${encodeURIComponent(folder)}&name=${encodeURIComponent(f.name)}`;
+      const res = await fetch('/api/upload-image?' + q, { method: 'POST', body: f });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'upload failed: ' + f.name);
+      onProgress(++done, files.length);
+    }
+  };
+  await Promise.all([one(), one(), one(), one()]);
+  return begin.path;
+}
+
+export async function fetchProgress(path) {
+  const r = await fetch('/api/progress?path=' + encodeURIComponent(path));
+  return r.json();
 }
 
 export async function loadServerSettings(path) {

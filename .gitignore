@@ -6,3 +6,6 @@ _tmp_/
 web/vendor/
 __pycache__/
 .claude/
+# Uploads from the UI (when BOOKS_DIR is this folder)
+pdf/
+img/

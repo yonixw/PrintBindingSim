@@ -78,3 +78,12 @@ main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 #warnings div.ok { margin-top: 6px; padding: 0; background: none; border: 0; color: #7ddc9a; }
 .filebtn input { display: none !important; }
 .row .filebtn { flex: 1; text-align: center; }
+
+.filebtn.wide { display: block; text-align: center; margin: 6px 0; }
+.bar { position: relative; height: 18px; margin: 6px 0; border-radius: 5px; background: #1b1e23; border: 1px solid var(--line); overflow: hidden; }
+.bar > div { position: absolute; inset: 0 auto 0 0; width: 0; background: rgba(110, 168, 254, .35); transition: width .3s; }
+.bar > span { position: relative; display: block; text-align: center; font-size: 11px; line-height: 16px; color: var(--fg); }
+
+button.danger { color: var(--err); border-color: rgba(255, 123, 123, .35); }
+button.danger:hover { background: rgba(255, 123, 123, .12); border-color: var(--err); }
+.row > button, .row > .filebtn { flex: 1; text-align: center; padding-left: 4px; padding-right: 4px; }

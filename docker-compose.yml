@@ -5,9 +5,10 @@ services:
     ports:
       - "${PORT:-8080}:8080"
     volumes:
-      # Folder that contains your page-image folders (each subfolder = one print job).
+      # Folder that contains your page-image folders and PDFs (each = one print job).
+      # PDFs uploaded from the UI are saved to its pdf/ subfolder, so it must be writable.
       # Override with:  BOOKS_DIR=D:/my/jobs docker compose up
-      - "${BOOKS_DIR:-.}:/data:ro"
+      - "${BOOKS_DIR:-.}:/data"
       - pbs-cache:/cache
     environment:
       - QUIET=1

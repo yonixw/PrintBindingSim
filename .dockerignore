@@ -5,3 +5,5 @@ web/vendor
 .git
 .cache
 .claude
+pdf
+img

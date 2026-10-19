@@ -16,14 +16,19 @@ docker compose up --build
 
 Then open http://localhost:8080.
 
-The folder mounted at `/data` is scanned for subfolders that contain images, and each one is a print job.
-The default is this project folder. To use another one:
+Everything can be done from the UI (step 0):
+
+* **Upload images…**: pick a folder of page images. It is stored on the server in `img/<folder name>/`.
+* **Upload PDF…**: stored in `pdf/`. A PDF works like a folder of images, with page *i* as image *i*. Nothing else is read from it.
+  Pages are rendered straight from the PDF on demand, the pages you look at first. The rest render in the background with a progress bar, so even a 500 MB PDF opens immediately.
+* **Clear all data…**: deletes everything in `img/` and `pdf/` (plus the render cache) after a confirmation. Nothing else in the data folder is touched.
+* **Open locally…**: view a folder in the browser only, without uploading it.
+
+The data folder is mounted at `/data`, and the default is this project folder. It must be writable for uploads. Any other image folders or PDFs already in it also appear in the list. To use another location:
 
 ```bash
 BOOKS_DIR=D:/print-jobs docker compose up
 ```
-
-You can also pick **Open local folder…** in the UI. That loads the images in the browser, with nothing uploaded.
 
 ## Model
 

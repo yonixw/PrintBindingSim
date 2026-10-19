@@ -4,9 +4,9 @@ WORKDIR /v
 RUN echo '{"name":"vendor","private":true}' > package.json \
  && npm install --no-audit --no-fund three@0.169.0
 
-# Stage 2: tiny Python server (stdlib + Pillow) that serves the web app and images.
+# Stage 2: tiny Python server (stdlib + Pillow + pypdfium2) that serves the web app, images and PDFs.
 FROM python:3.12-slim
-RUN pip install --no-cache-dir pillow==10.4.0
+RUN pip install --no-cache-dir pillow==10.4.0 pypdfium2==4.30.0
 WORKDIR /app
 COPY server/ server/
 COPY web/ web/

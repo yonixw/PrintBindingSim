@@ -1,25 +1,33 @@
 """PrintBindingSim server: browses a data folder, serves page images + cached thumbnails.
 
-Only dependency besides the stdlib is Pillow.
-  DATA_DIR   folder containing your page-image folders (default /data)
+Dependencies besides the stdlib: Pillow, and pypdfium2 for PDFs.
+  DATA_DIR   folder containing your page-image folders and PDFs (default /data)
   CACHE_DIR  thumbnail + settings cache (default /cache)
   PORT       default 8080
+
+A PDF is treated like a folder of images: page i is image i. Pages are rendered on
+demand (and in the background) straight from the PDF; nothing is split up front.
+Uploads from the UI are stored in DATA_DIR/pdf/ (PDFs) and DATA_DIR/img/<folder>/ (images);
+"clear all data" empties exactly those two folders.
 """
 import hashlib
-import io
 import json
 import mimetypes
+import multiprocessing
 import os
 import re
+import shutil
 import sys
 import threading
-from concurrent.futures import ThreadPoolExecutor
-from http import HTTPStatus
+from collections import namedtuple
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from PIL import Image, ImageFilter
+
+import pdfwork
 
 Image.MAX_IMAGE_PIXELS = None
 
@@ -27,39 +35,37 @@ DATA_DIR = Path(os.environ.get("DATA_DIR", "/data")).resolve()
 CACHE_DIR = Path(os.environ.get("CACHE_DIR", "/cache")).resolve()
 WEB_DIR = Path(os.environ.get("WEB_DIR", Path(__file__).resolve().parent.parent / "web")).resolve()
 PORT = int(os.environ.get("PORT", "8080"))
+WORKERS = max(2, (os.cpu_count() or 2) - 1)
 
 IMG_EXT = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff"}
 SIZES = {"lo": 512, "mid": 1600}  # long side in px; "full" = original file
+PDF_FULL = 2400                   # long side of a "full" PDF page render
+PDF_DIR = "pdf"                   # uploaded PDFs go to DATA_DIR/pdf
+IMG_DIR = "img"                   # uploaded image folders go to DATA_DIR/img/<folder>
 
 THUMBS = CACHE_DIR / "thumbs"
 SETTINGS = CACHE_DIR / "settings"
-THUMBS.mkdir(parents=True, exist_ok=True)
-SETTINGS.mkdir(parents=True, exist_ok=True)
+PDFINFO = CACHE_DIR / "pdfinfo"
+for d in (THUMBS, SETTINGS, PDFINFO):
+    d.mkdir(parents=True, exist_ok=True)
+
+PdfPage = namedtuple("PdfPage", "path index")
 
 _locks: dict[str, threading.Lock] = {}
 _locks_guard = threading.Lock()
 _dim_cache: dict[tuple, tuple] = {}
-_pool = ThreadPoolExecutor(max_workers=max(2, (os.cpu_count() or 2) - 1))
-_warm_gen: dict[str, int] = {}  # folder -> generation; queued warm jobs of older generations are skipped
+_pdf_cache: dict[tuple, list] = {}
+_pool = ThreadPoolExecutor(max_workers=WORKERS)
+_ppool = None  # process pool for PDFium, created on first use
+_progress: dict[str, dict] = {}  # source -> {gen, done, total}
 
 
-def warm_folder(rel: str, files, blur: float):
-    """Pre-render thumbnails (and blurred large versions) for every file in the background."""
+def pdf_pool():
+    global _ppool
     with _locks_guard:
-        gen = _warm_gen[rel] = _warm_gen.get(rel, 0) + 1
-
-    def job(f, size):
-        if _warm_gen.get(rel) == gen:
-            try:
-                make_thumb(f, size, blur)
-            except Exception:
-                pass
-
-    for f in files:
-        _pool.submit(job, f, "lo")
-    if blur > 0:  # blurred "full" is served from the mid size
-        for f in files:
-            _pool.submit(job, f, "mid")
+        if _ppool is None:
+            _ppool = ProcessPoolExecutor(max_workers=WORKERS, mp_context=multiprocessing.get_context("spawn"))
+    return _ppool
 
 
 def natural_key(s: str):
@@ -73,10 +79,30 @@ def safe_path(rel: str) -> Path:
     return p
 
 
+def is_pdf(p: Path) -> bool:
+    return p.suffix.lower() == ".pdf" and p.is_file()
+
+
 def list_images(folder: Path):
     files = [f for f in folder.iterdir() if f.is_file() and f.suffix.lower() in IMG_EXT and not f.name.startswith(".")]
     files.sort(key=lambda f: natural_key(f.name))
     return files
+
+
+def pdf_pages(p: Path):
+    """[(w_pt, h_pt)] per page; cached in memory and on disk (instant reopen of huge PDFs)."""
+    st = p.stat()
+    key = (str(p), st.st_mtime_ns, st.st_size)
+    if key in _pdf_cache:
+        return _pdf_cache[key]
+    disk = PDFINFO / (hashlib.sha1(repr(key).encode()).hexdigest() + ".json")
+    if disk.exists():
+        sizes = json.loads(disk.read_text())
+    else:
+        sizes = pdf_pool().submit(pdfwork.pdf_info, str(p)).result()
+        disk.write_text(json.dumps(sizes))
+    _pdf_cache[key] = sizes
+    return sizes
 
 
 def find_folders(root: Path, max_depth=4):
@@ -84,22 +110,70 @@ def find_folders(root: Path, max_depth=4):
 
     def walk(d: Path, depth):
         try:
-            entries = sorted((e for e in d.iterdir() if e.is_dir() and not e.name.startswith(".")), key=lambda e: natural_key(e.name))
+            children = list(d.iterdir())
         except OSError:
             return
-        try:
-            n = sum(1 for f in d.iterdir() if f.is_file() and f.suffix.lower() in IMG_EXT)
-        except OSError:
-            n = 0
+        n = sum(1 for f in children if f.is_file() and f.suffix.lower() in IMG_EXT)
+        rel = d.relative_to(root).as_posix()
+        rel = "" if rel == "." else rel
         if n:
-            rel = d.relative_to(root).as_posix()
-            out.append({"path": "" if rel == "." else rel, "count": n})
+            out.append({"path": rel, "count": n, "kind": "folder"})
+        for f in sorted((f for f in children if f.is_file() and f.suffix.lower() == ".pdf"), key=lambda f: natural_key(f.name)):
+            try:
+                out.append({"path": (rel + "/" if rel else "") + f.name, "count": len(pdf_pages(f)), "kind": "pdf"})
+            except Exception as e:
+                out.append({"path": (rel + "/" if rel else "") + f.name, "count": 0, "kind": "pdf", "error": str(e)})
         if depth < max_depth:
-            for e in entries:
+            for e in sorted((e for e in children if e.is_dir() and not e.name.startswith(".")), key=lambda e: natural_key(e.name)):
                 walk(e, depth + 1)
 
     walk(root, 0)
     return out
+
+
+def source_items(rel: str):
+    """(items, image metadata) for a folder or a PDF."""
+    p = safe_path(rel)
+    if is_pdf(p):
+        items, meta = [], []
+        for i, (w, h) in enumerate(pdf_pages(p)):
+            k = PDF_FULL / max(w, h, 1)
+            items.append(PdfPage(p, i))
+            meta.append({"name": f"page {i + 1:04d}", "w": round(w * k), "h": round(h * k), "format": "PDF"})
+        return items, meta
+    files = list_images(p)
+    meta = []
+    for f in files:
+        try:
+            w, h, fmt = image_dims(f)
+            meta.append({"name": f.name, "w": w, "h": h, "format": fmt})
+        except Exception as e:  # unreadable file
+            meta.append({"name": f.name, "w": 0, "h": 0, "error": str(e)})
+    return files, meta
+
+
+def warm_source(rel: str, items, blur: float):
+    """Pre-render thumbnails (and blurred / PDF large versions) for every item in the background."""
+    pdf = bool(items) and isinstance(items[0], PdfPage)
+    sizes = ["lo"] + (["mid"] if blur > 0 else [])
+    with _locks_guard:
+        prev = _progress.get(rel, {}).get("gen", 0)
+        prog = _progress[rel] = {"gen": prev + 1, "done": 0, "total": len(items) * len(sizes), "pdf": pdf}
+    gen = prog["gen"]
+
+    def job(item, size):
+        if _progress.get(rel, {}).get("gen") != gen:
+            return  # superseded by a newer warm-up (e.g. blur changed)
+        try:
+            make_thumb(item, size, blur)
+        except Exception:
+            pass
+        with _locks_guard:
+            prog["done"] += 1
+
+    for size in sizes:
+        for item in items:
+            _pool.submit(job, item, size)
 
 
 def image_dims(f: Path):
@@ -119,14 +193,16 @@ def parse_blur(v) -> float:
         return 0.0
 
 
-def thumb_path(f: Path, size: str, blur: float = 0) -> Path:
-    st = f.stat()
-    h = hashlib.sha1(f"{f}|{st.st_mtime_ns}|{st.st_size}|{size}|{blur}".encode()).hexdigest()
+def thumb_path(item, size: str, blur: float = 0) -> Path:
+    p = item.path if isinstance(item, PdfPage) else item
+    st = p.stat()
+    page = f"|p{item.index}" if isinstance(item, PdfPage) else ""
+    h = hashlib.sha1(f"{p}|{st.st_mtime_ns}|{st.st_size}{page}|{size}|{blur}".encode()).hexdigest()
     return THUMBS / h[:2] / f"{h}.jpg"
 
 
-def make_thumb(f: Path, size: str, blur: float = 0) -> Path:
-    out = thumb_path(f, size, blur)
+def make_thumb(item, size: str, blur: float = 0) -> Path:
+    out = thumb_path(item, size, blur)
     if out.exists():
         return out
     with _locks_guard:
@@ -134,7 +210,12 @@ def make_thumb(f: Path, size: str, blur: float = 0) -> Path:
     with lock:
         if out.exists():
             return out
-        with Image.open(f) as im:
+        if isinstance(item, PdfPage):
+            long_side = PDF_FULL if size == "full" else SIZES[size]
+            quality = 90 if size == "full" else 85
+            pdf_pool().submit(pdfwork.render_page, str(item.path), item.index, long_side, blur, str(out), quality).result()
+            return out
+        with Image.open(item) as im:
             im.draft("RGB", (SIZES[size], SIZES[size]))
             im = im.convert("RGBA") if im.mode in ("RGBA", "LA", "P") else im.convert("RGB")
             if im.mode == "RGBA":
@@ -172,6 +253,50 @@ def settings_file(rel: str) -> Path:
     return SETTINGS / (hashlib.sha1(rel.encode()).hexdigest() + ".json")
 
 
+def safe_name(name: str) -> str:
+    name = os.path.basename(name.replace("\\", "/")).strip()
+    name = re.sub(r"[^\w\-. ()\[\]]+", "_", name).strip(" .")
+    if not name:
+        raise ValueError("bad file name")
+    return name
+
+
+def safe_upload_name(name: str) -> str:
+    name = safe_name(name)
+    if not name.lower().endswith(".pdf"):
+        raise ValueError("only .pdf files can be uploaded")
+    return name
+
+
+def stream_to(rfile, n: int, dest: Path):
+    """Write n request bytes to dest via a temp file, in chunks (big uploads never sit in memory)."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    part = dest.parent / ("." + dest.name + ".part")
+    with open(part, "wb") as fh:
+        left = n
+        while left > 0:
+            chunk = rfile.read(min(left, 4 << 20))
+            if not chunk:
+                raise IOError("upload interrupted")
+            fh.write(chunk)
+            left -= len(chunk)
+    return part
+
+
+def empty_dir(d: Path) -> int:
+    """Delete everything inside d (not d itself). Returns the number of top-level entries removed."""
+    if not d.is_dir():
+        return 0
+    n = 0
+    for child in d.iterdir():
+        if child.is_dir() and not child.is_symlink():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
+        n += 1
+    return n
+
+
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *a, **kw):
         super().__init__(*a, directory=str(WEB_DIR), **kw)
@@ -204,54 +329,103 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_header("Cache-Control", "no-cache")
         super().end_headers()
 
-    def do_GET(self):
+    def query(self):
         u = urlparse(self.path)
-        if not u.path.startswith("/api/"):
+        return u.path, {k: v[0] for k, v in parse_qs(u.query).items()}
+
+    def do_GET(self):
+        path, q = self.query()
+        if not path.startswith("/api/"):
             return super().do_GET()
-        q = {k: v[0] for k, v in parse_qs(u.query).items()}
         try:
-            if u.path == "/api/folders":
+            if path == "/api/folders":
                 return self.send_json({"root": str(DATA_DIR), "folders": find_folders(DATA_DIR)})
-            if u.path == "/api/folder":
-                folder = safe_path(q.get("path", ""))
-                files = list_images(folder)
-                imgs = []
-                for f in files:
-                    try:
-                        w, h, fmt = image_dims(f)
-                        imgs.append({"name": f.name, "w": w, "h": h, "format": fmt})
-                    except Exception as e:  # unreadable file
-                        imgs.append({"name": f.name, "w": 0, "h": 0, "error": str(e)})
-                warm_folder(q.get("path", ""), files, parse_blur(q.get("blur")))
-                return self.send_json({"path": q.get("path", ""), "images": imgs})
-            if u.path == "/api/warm":
-                folder = safe_path(q.get("path", ""))
-                warm_folder(q.get("path", ""), list_images(folder), parse_blur(q.get("blur")))
+            if path == "/api/data-summary":
+                # What "clear all data" would delete
+                imgs = sum(1 for d in (DATA_DIR / IMG_DIR).glob("*") if d.is_dir()) if (DATA_DIR / IMG_DIR).is_dir() else 0
+                pdfs = sum(1 for f in (DATA_DIR / PDF_DIR).glob("*.pdf")) if (DATA_DIR / PDF_DIR).is_dir() else 0
+                return self.send_json({"imageFolders": imgs, "pdfs": pdfs})
+            if path == "/api/folder":
+                rel = q.get("path", "")
+                items, meta = source_items(rel)
+                warm_source(rel, items, parse_blur(q.get("blur")))
+                return self.send_json({"path": rel, "kind": "pdf" if is_pdf(safe_path(rel)) else "folder", "images": meta})
+            if path == "/api/warm":
+                rel = q.get("path", "")
+                warm_source(rel, source_items(rel)[0], parse_blur(q.get("blur")))
                 return self.send_json({"ok": True})
-            if u.path == "/api/image":
-                f = safe_path(q["path"])
+            if path == "/api/progress":
+                p = _progress.get(q.get("path", ""), {})
+                return self.send_json({"done": p.get("done", 0), "total": p.get("total", 0)})
+            if path == "/api/image":
+                p = safe_path(q["path"])
                 size = q.get("size", "full")
                 blur = parse_blur(q.get("blur"))
                 if blur > 0 and size not in SIZES:
                     size = "mid"  # no point sending a full-resolution blurred image
+                if is_pdf(p):
+                    return self.send_file(make_thumb(PdfPage(p, int(q["page"])), size, blur), "image/jpeg")
                 if size in SIZES:
-                    return self.send_file(make_thumb(f, size, blur), "image/jpeg")
-                return self.send_file(f, sniff_type(f))
-            if u.path == "/api/settings":
+                    return self.send_file(make_thumb(p, size, blur), "image/jpeg")
+                return self.send_file(p, sniff_type(p))
+            if path == "/api/settings":
                 sf = settings_file(q.get("path", ""))
                 return self.send_json(json.loads(sf.read_text()) if sf.exists() else None)
         except PermissionError:
             return self.send_json({"error": "forbidden"}, 403)
-        except (FileNotFoundError, KeyError) as e:
+        except (FileNotFoundError, KeyError, IndexError) as e:
             return self.send_json({"error": f"not found: {e}"}, 404)
         except Exception as e:
             return self.send_json({"error": str(e)}, 500)
         self.send_json({"error": "unknown endpoint"}, 404)
 
+    def do_POST(self):
+        path, q = self.query()
+        try:
+            n = int(self.headers.get("Content-Length", "0"))
+            if path == "/api/upload-images/begin":
+                # Start (or replace) an uploaded image folder: DATA_DIR/img/<folder>
+                folder = safe_name(q.get("folder", ""))
+                d = DATA_DIR / IMG_DIR / folder
+                if d.exists():
+                    shutil.rmtree(d)
+                d.mkdir(parents=True)
+                return self.send_json({"path": f"{IMG_DIR}/{folder}"})
+            if path == "/api/upload-image":
+                folder, name = safe_name(q.get("folder", "")), safe_name(q.get("name", ""))
+                if Path(name).suffix.lower() not in IMG_EXT:
+                    raise ValueError(f"not an image file: {name}")
+                dest = DATA_DIR / IMG_DIR / folder / name
+                os.replace(stream_to(self.rfile, n, dest), dest)
+                return self.send_json({"ok": True})
+            if path == "/api/clear":
+                # Delete every uploaded image folder and PDF, and the render cache. Nothing else.
+                removed = empty_dir(DATA_DIR / IMG_DIR) + empty_dir(DATA_DIR / PDF_DIR)
+                empty_dir(THUMBS)
+                empty_dir(PDFINFO)
+                _pdf_cache.clear(); _dim_cache.clear(); _progress.clear()
+                return self.send_json({"removed": removed})
+            if path != "/api/upload":
+                return self.send_json({"error": "unknown endpoint"}, 404)
+            name = safe_upload_name(q.get("name", ""))
+            dest = DATA_DIR / PDF_DIR / name
+            part = stream_to(self.rfile, n, dest)
+            with open(part, "rb") as fh:
+                magic = fh.read(5)
+            if magic != b"%PDF-":
+                part.unlink()
+                raise ValueError("not a PDF file")
+            os.replace(part, dest)
+            rel = f"{PDF_DIR}/{name}"
+            return self.send_json({"path": rel, "pages": len(pdf_pages(dest))})
+        except OSError as e:
+            return self.send_json({"error": f"cannot write to the data folder (is it mounted writable?): {e}"}, 500)
+        except Exception as e:
+            return self.send_json({"error": str(e)}, 400)
+
     def do_PUT(self):
-        u = urlparse(self.path)
-        q = {k: v[0] for k, v in parse_qs(u.query).items()}
-        if u.path != "/api/settings":
+        path, q = self.query()
+        if path != "/api/settings":
             return self.send_json({"error": "unknown endpoint"}, 404)
         n = int(self.headers.get("Content-Length", "0"))
         data = json.loads(self.rfile.read(n) or b"null")
