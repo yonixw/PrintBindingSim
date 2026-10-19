@@ -73,9 +73,25 @@ function syncFormEnabled(s) {
 function onFormChange() {
   state.settings = readForm();
   syncFormEnabled(state.settings);
+  if (applyBlur()) resetTextures();
   rebuild(true); persist();
   $('#preset').value = '';
 }
+// Blur is done by the server (or the browser, for a local folder) on every image.
+function applyBlur() {
+  const b = state.settings.blur || 0;
+  $('#blurval').textContent = b ? `— ${b}` : '— off';
+  if (!state.source || !state.source.setBlur(b)) return false;
+  state.source.warm();
+  return true;
+}
+// Drop every texture (they were made from the old images), keeping the open spread.
+function resetTextures() {
+  if (!book3d) return;
+  state.keepCur = book3d.cur;
+  book3d.dispose(); book3d = null;
+}
+document.querySelector('[data-k="blur"]').addEventListener('input', (e) => { $('#blurval').textContent = +e.target.value ? `— ${e.target.value}` : '— off'; });
 for (const el of controls) {
   if (el.classList.contains('seg')) continue;
   el.addEventListener('change', onFormChange);
@@ -111,6 +127,7 @@ function rebuild(keepSpread) {
   }
   book3d.source = state.source;
   book3d.setBook(book, keepSpread);
+  if (state.keepCur !== undefined) { book3d.goTo(state.keepCur, false); state.keepCur = undefined; }
   $('#slider').max = book.leaves.length;
   summarize(book);
   if (state.view === 'vspreads') spreads.render(book, state.source);
@@ -247,6 +264,7 @@ async function useSource(src, key, serverSettings) {
   if (book3d) book3d.source = src;
   // drop textures from a previous source
   if (book3d) { book3d.dispose(); book3d = null; }
+  applyBlur();
   rebuild(false);
 }
 

@@ -17,6 +17,15 @@ class BaseSource {
   constructor() {
     this.cache = { lo: new Map(), full: new Map() };
     this.fullLimit = 24; // keep at most this many full-res images decoded
+    this.blur = 0;
+  }
+  /** Change blur strength; drops every cached image. Returns true if it changed. */
+  setBlur(b) {
+    b = Math.max(0, Math.min(100, +b || 0));
+    if (b === this.blur) return false;
+    this.blur = b;
+    this.cache = { lo: new Map(), full: new Map() };
+    return true;
   }
   get(i, level) {
     const c = this.cache[level];
@@ -47,9 +56,11 @@ export class ServerSource extends BaseSource {
   }
   url(i, level) {
     const rel = (this.path ? this.path + '/' : '') + this.images[i].name;
-    return `/api/image?path=${encodeURIComponent(rel)}&size=${level}`;
+    return `/api/image?path=${encodeURIComponent(rel)}&size=${level}${this.blur ? '&blur=' + this.blur : ''}`;
   }
   _load(i, level) { return loadImg(this.url(i, level)); }
+  /** Ask the server to pre-render (blurred) versions of every file. */
+  warm() { fetch(`/api/warm?path=${encodeURIComponent(this.path)}&blur=${this.blur}`).catch(() => {}); }
 }
 
 export class LocalSource extends BaseSource {
@@ -73,8 +84,10 @@ export class LocalSource extends BaseSource {
     s.images = files.map((f) => ({ name: f.name, w: d0.w, h: d0.h }));
     return s;
   }
+  warm() {}
   async _load(i, level) {
     const f = this.files[i];
+    if (this.blur > 0) return this._blurred(f, level === 'full' ? 1600 : LO_SIZE);
     if (level === 'full') return createImageBitmap(f);
     const bm = await createImageBitmap(f);
     const k = LO_SIZE / Math.max(bm.width, bm.height);
@@ -84,6 +97,19 @@ export class LocalSource extends BaseSource {
     return out;
   }
 }
+
+LocalSource.prototype._blurred = async function (f, size) {
+  const bm = await createImageBitmap(f);
+  const k = Math.min(1, size / Math.max(bm.width, bm.height));
+  const cv = document.createElement('canvas');
+  cv.width = Math.round(bm.width * k); cv.height = Math.round(bm.height * k);
+  const c = cv.getContext('2d');
+  c.fillStyle = '#fff'; c.fillRect(0, 0, cv.width, cv.height);
+  c.filter = `blur(${(this.blur / 1000) * Math.max(cv.width, cv.height)}px)`;
+  c.drawImage(bm, 0, 0, cv.width, cv.height);
+  bm.close();
+  return cv;
+};
 
 export async function fetchFolders() {
   const r = await fetch('/api/folders');

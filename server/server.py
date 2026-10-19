@@ -19,7 +19,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from PIL import Image
+from PIL import Image, ImageFilter
 
 Image.MAX_IMAGE_PIXELS = None
 
@@ -40,6 +40,26 @@ _locks: dict[str, threading.Lock] = {}
 _locks_guard = threading.Lock()
 _dim_cache: dict[tuple, tuple] = {}
 _pool = ThreadPoolExecutor(max_workers=max(2, (os.cpu_count() or 2) - 1))
+_warm_gen: dict[str, int] = {}  # folder -> generation; queued warm jobs of older generations are skipped
+
+
+def warm_folder(rel: str, files, blur: float):
+    """Pre-render thumbnails (and blurred large versions) for every file in the background."""
+    with _locks_guard:
+        gen = _warm_gen[rel] = _warm_gen.get(rel, 0) + 1
+
+    def job(f, size):
+        if _warm_gen.get(rel) == gen:
+            try:
+                make_thumb(f, size, blur)
+            except Exception:
+                pass
+
+    for f in files:
+        _pool.submit(job, f, "lo")
+    if blur > 0:  # blurred "full" is served from the mid size
+        for f in files:
+            _pool.submit(job, f, "mid")
 
 
 def natural_key(s: str):
@@ -91,14 +111,22 @@ def image_dims(f: Path):
     return _dim_cache[key]
 
 
-def thumb_path(f: Path, size: str) -> Path:
+def parse_blur(v) -> float:
+    """Blur strength 0..100: Gaussian radius in thousandths of the image's long side."""
+    try:
+        return max(0.0, min(100.0, round(float(v), 1)))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def thumb_path(f: Path, size: str, blur: float = 0) -> Path:
     st = f.stat()
-    h = hashlib.sha1(f"{f}|{st.st_mtime_ns}|{st.st_size}|{size}".encode()).hexdigest()
+    h = hashlib.sha1(f"{f}|{st.st_mtime_ns}|{st.st_size}|{size}|{blur}".encode()).hexdigest()
     return THUMBS / h[:2] / f"{h}.jpg"
 
 
-def make_thumb(f: Path, size: str) -> Path:
-    out = thumb_path(f, size)
+def make_thumb(f: Path, size: str, blur: float = 0) -> Path:
+    out = thumb_path(f, size, blur)
     if out.exists():
         return out
     with _locks_guard:
@@ -114,6 +142,9 @@ def make_thumb(f: Path, size: str) -> Path:
                 bg.paste(im, mask=im.split()[3])
                 im = bg
             im.thumbnail((SIZES[size], SIZES[size]), Image.LANCZOS)
+            if blur > 0:
+                # Relative radius, so the thumbnail and the large version look the same.
+                im = im.filter(ImageFilter.GaussianBlur(blur / 1000 * max(im.size)))
             out.parent.mkdir(parents=True, exist_ok=True)
             tmp = out.with_suffix(".tmp")
             im.save(tmp, "JPEG", quality=85)
@@ -191,15 +222,20 @@ class Handler(SimpleHTTPRequestHandler):
                         imgs.append({"name": f.name, "w": w, "h": h, "format": fmt})
                     except Exception as e:  # unreadable file
                         imgs.append({"name": f.name, "w": 0, "h": 0, "error": str(e)})
-                # warm thumbnail cache in the background
-                for f in files:
-                    _pool.submit(make_thumb, f, "lo")
+                warm_folder(q.get("path", ""), files, parse_blur(q.get("blur")))
                 return self.send_json({"path": q.get("path", ""), "images": imgs})
+            if u.path == "/api/warm":
+                folder = safe_path(q.get("path", ""))
+                warm_folder(q.get("path", ""), list_images(folder), parse_blur(q.get("blur")))
+                return self.send_json({"ok": True})
             if u.path == "/api/image":
                 f = safe_path(q["path"])
                 size = q.get("size", "full")
+                blur = parse_blur(q.get("blur"))
+                if blur > 0 and size not in SIZES:
+                    size = "mid"  # no point sending a full-resolution blurred image
                 if size in SIZES:
-                    return self.send_file(make_thumb(f, size), "image/jpeg")
+                    return self.send_file(make_thumb(f, size, blur), "image/jpeg")
                 return self.send_file(f, sniff_type(f))
             if u.path == "/api/settings":
                 sf = settings_file(q.get("path", ""))

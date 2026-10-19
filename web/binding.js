@@ -19,6 +19,7 @@ export const PAPER_SIZES = {
 export const DEFAULT_SETTINGS = {
   rotate: 0,             // FIRST step: image rotation on the paper, clockwise degrees (0/90/180/270).
                          // The rotated image is what one printed side looks like.
+  blur: 0,               // spoiler-free review: blur strength 0..100 (radius in 1/1000 of the long side)
   duplex: true,          // print on both sides
   flip: 'short',         // 'long' | 'short' : duplex flip edge (printer driver setting)
   layout: 'fold',        // 'single' : each side is one page

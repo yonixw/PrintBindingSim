@@ -31,6 +31,7 @@ Settings are applied in this order:
 
 | Setting | Meaning |
 |---|---|
+| Blur | Spoiler-free review. The server blurs every image (thumbnails and the large version, cached), and a local folder is blurred in the browser. Strength is relative to the image size. |
 | Rotate image | Applied first. The rotated image is exactly what one printed side looks like, and it sets portrait or landscape. |
 | Each image is | **One page**: the whole side is a single page. **Two pages, fold**: fold every sheet in half, front outside. **Two pages, cut**: cut every sheet in half. |
 | Fold / cut line | Vertical (left and right halves) or horizontal (top and bottom halves). |
