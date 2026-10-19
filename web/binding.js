@@ -31,6 +31,8 @@ export const DEFAULT_SETTINGS = {
                          //      'stack' = put one half-stack on top of the other
                          //      'sheet' = keep the two halves of each sheet together
   cutFirst: 'right',     // cut stack/sheet: which half comes first (left/right or top/bottom)
+  firstHalf: 'left',     // fold / cut-and-close: which half of sheet 1's front is page 1 (left/right or
+                         // top/bottom). The spine then only mirrors the layout: same pages, reversed sides.
   binding: 'right',      // 'left' | 'right' | 'top' | 'bottom' : where the spine is
   paper: 'auto',         // key of PAPER_SIZES or 'auto' (closest to image aspect)
   thickness: 0.1,        // paper thickness, mm
@@ -45,12 +47,12 @@ export const DEFAULT_SETTINGS = {
 export const PRESETS = {
   // Acrobat: Print -> Booklet (printed to PDF). Each PDF page is one landscape sheet side
   // holding two pages, already in saddle-stitch order, covers included.
-  'Adobe PDF booklet (Acrobat Print → Booklet, binding Left)': { rotate: 0, duplex: true, flip: 'short', layout: 'fold', split: 'vertical', sheetsPerSignature: 0, binding: 'left', cover: 'pages' },
-  'Adobe PDF booklet (Acrobat Print → Booklet, binding Right)': { rotate: 0, duplex: true, flip: 'short', layout: 'fold', split: 'vertical', sheetsPerSignature: 0, binding: 'right', cover: 'pages' },
-  'Booklet, left-to-right (saddle stitch)': { duplex: true, flip: 'short', layout: 'fold', split: 'vertical', sheetsPerSignature: 0, binding: 'left' },
-  'Booklet, right-to-left / manga (saddle stitch)': { duplex: true, flip: 'short', layout: 'fold', split: 'vertical', sheetsPerSignature: 0, binding: 'right' },
-  'Folded sheets stacked (each sheet its own signature), RTL': { duplex: true, flip: 'short', layout: 'fold', split: 'vertical', sheetsPerSignature: 1, binding: 'right' },
-  'Cut in half, close like a book, RTL': { duplex: true, flip: 'short', layout: 'cut', split: 'vertical', cutOrder: 'book', binding: 'right' },
+  'Adobe PDF booklet (Acrobat Print → Booklet, binding Left)': { rotate: 0, duplex: true, flip: 'short', layout: 'fold', split: 'vertical', sheetsPerSignature: 0, firstHalf: 'right', binding: 'left', cover: 'pages' },
+  'Adobe PDF booklet (Acrobat Print → Booklet, binding Right)': { rotate: 0, duplex: true, flip: 'short', layout: 'fold', split: 'vertical', sheetsPerSignature: 0, firstHalf: 'left', binding: 'right', cover: 'pages' },
+  'Booklet, left-to-right (saddle stitch)': { duplex: true, flip: 'short', layout: 'fold', split: 'vertical', sheetsPerSignature: 0, firstHalf: 'right', binding: 'left' },
+  'Booklet, right-to-left / manga (saddle stitch)': { duplex: true, flip: 'short', layout: 'fold', split: 'vertical', sheetsPerSignature: 0, firstHalf: 'left', binding: 'right' },
+  'Folded sheets stacked (each sheet its own signature), RTL': { duplex: true, flip: 'short', layout: 'fold', split: 'vertical', sheetsPerSignature: 1, firstHalf: 'left', binding: 'right' },
+  'Cut in half, close like a book, RTL': { duplex: true, flip: 'short', layout: 'cut', split: 'vertical', cutOrder: 'book', firstHalf: 'left', binding: 'right' },
   'Cut in half, right half-stack on top, RTL': { duplex: true, flip: 'short', layout: 'cut', split: 'vertical', cutOrder: 'stack', cutFirst: 'right', binding: 'right' },
   'Portrait book, duplex long edge, bound left': { duplex: true, flip: 'long', layout: 'single', binding: 'left' },
   'Landscape, duplex short edge, bound left': { duplex: true, flip: 'short', layout: 'single', binding: 'left' },
@@ -71,6 +73,9 @@ export function migrateSettings(s) {
     if (s.coverBlanksFront === undefined) s.coverBlanksFront = s.coverBlanks;
     if (s.coverBlanksBack === undefined) s.coverBlanksBack = s.coverBlanks;
     delete s.coverBlanks;
+  }
+  if (s.firstHalf === undefined && s.binding) {
+    s.firstHalf = { left: 'right', right: 'left', top: 'bottom', bottom: 'top' }[s.binding];
   }
   delete s.skipFirst;
   delete s.blankBefore;
@@ -230,17 +235,25 @@ export function buildBook(images, settings) {
   }
 
   const leaves = [];
+  let mirrored = false;
   if (layout === 'single') {
     for (const sh of sheets) leaves.push(makeLeaf(sh, upright(rects.whole), 'front', 'whole'));
   } else if (flipped) {
     // Fold (or cut and close like a book): the cover half faces the reader, the other
     // half is turned over onto the back. Folding mirrors across the split line.
+    // Page 1's half decides which pages are which; it binds naturally on the opposite edge
+    // (right half -> spine left). With the spine on the other side the same pages are laid
+    // out mirrored: each page is flipped across the spine so it stays upright.
+    const halves = halfNames(split);
+    const p1Half = halves.includes(st.firstHalf) ? st.firstHalf : halves[0];
+    const natural = { right: 'left', left: 'right', bottom: 'top', top: 'bottom' }[p1Half];
+    const mirror = natural !== binding;
     let coverF, backF, coverName, backName;
     if (split === 'vertical') {
-      if (binding === 'left') { coverF = (s, t) => [W / 2 + s, t]; backF = (s, t) => [W / 2 - s, t]; coverName = 'right'; backName = 'left'; }
+      if (natural === 'left') { coverF = (s, t) => [W / 2 + s, t]; backF = (s, t) => [W / 2 - s, t]; coverName = 'right'; backName = 'left'; }
       else { coverF = (s, t) => [W / 2 - s, t]; backF = (s, t) => [W / 2 + s, t]; coverName = 'left'; backName = 'right'; }
     } else {
-      if (binding === 'top') { coverF = (s, t) => [t, H / 2 - s]; backF = (s, t) => [t, H / 2 + s]; coverName = 'bottom'; backName = 'top'; }
+      if (natural === 'top') { coverF = (s, t) => [t, H / 2 - s]; backF = (s, t) => [t, H / 2 + s]; coverName = 'bottom'; backName = 'top'; }
       else { coverF = (s, t) => [t, H / 2 + s]; backF = (s, t) => [t, H / 2 - s]; coverName = 'top'; backName = 'bottom'; }
     }
     const n = layout === 'fold' && st.sheetsPerSignature > 0 ? st.sheetsPerSignature : sheets.length;
@@ -255,6 +268,11 @@ export function buildBook(images, settings) {
       for (const l of second) l.signature = g / n;
       leaves.push(...first, ...second);
     }
+    if (mirror) {
+      const flipS = (f) => ({ ...f, o: [f.o[0] + f.ds[0], f.o[1] + f.ds[1]], ds: [-f.ds[0], -f.ds[1]] });
+      for (const l of leaves) { l.recto = flipS(l.recto); l.verso = flipS(l.verso); }
+    }
+    mirrored = mirror;
   } else {
     // Cut, both halves kept face up.
     const names = halfNames(split);
@@ -306,7 +324,7 @@ export function buildBook(images, settings) {
   }
   leaves.forEach((l, i) => (l.index = i));
 
-  return { leaves, sheets, W, H, Ls, Lt, binding, layout, split, flipped, flipAxis, paper, settings: st, cover };
+  return { leaves, sheets, W, H, Ls, Lt, binding, layout, split, flipped, flipAxis, paper, settings: st, cover, mirrored };
 }
 
 /** uv for normalized leaf coords */

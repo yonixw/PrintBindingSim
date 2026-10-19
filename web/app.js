@@ -56,6 +56,7 @@ function syncFormEnabled(s) {
   show('.when-fold', s.layout === 'fold');
   show('.when-cut', s.layout === 'cut');
   show('.when-cutfirst', s.layout === 'cut' && s.cutOrder !== 'book');
+  show('.when-firsthalf', s.layout === 'fold' || (s.layout === 'cut' && s.cutOrder === 'book'));
   show('.when-duplex', s.duplex);
   show('.when-separate', s.cover === 'separate');
   show('.when-pages', s.cover !== 'separate');
@@ -67,6 +68,13 @@ function syncFormEnabled(s) {
   }
   if (!names.includes(s.cutFirst)) s.cutFirst = names[s.binding === 'left' ? 0 : 1] || names[0];
   segSet(cf, s.cutFirst);
+  const fh = $('#firstHalf');
+  if (fh.dataset.split !== s.split) {
+    fh.dataset.split = s.split;
+    fh.innerHTML = names.map((n) => `<button value="${n}">${n[0].toUpperCase() + n.slice(1)} half</button>`).join('');
+  }
+  if (!names.includes(s.firstHalf)) s.firstHalf = names[0];
+  segSet(fh, s.firstHalf);
   const allowed = allowedBindings(s);
   for (const b of $('#binding').querySelectorAll('button')) b.disabled = !allowed.includes(b.value);
   if (!allowed.includes(s.binding)) s.binding = allowed[0];
@@ -207,7 +215,8 @@ function summarize(book) {
   }
   explainAssembly(book);
   const reads = { left: 'reads left → right', right: 'reads right → left', top: 'flips up', bottom: 'flips down' }[book.binding];
-  $('#out4').textContent = `→ ${pageW}×${pageH} mm pages, ${reads}, ≈${(N * s.thickness).toFixed(1)} mm thick`;
+  $('#out4').textContent = `→ ${pageW}×${pageH} mm pages, ${reads}, ≈${(N * s.thickness).toFixed(1)} mm thick` +
+    (book.mirrored ? ' · laid out mirrored for this spine (same pages, reversed sides)' : '');
 
   $('#summary').innerHTML = [
     `${imgs.length} images → ${book.sheets.length} printed sheets → ${N * 2} pages` +
