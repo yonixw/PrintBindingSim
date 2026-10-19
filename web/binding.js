@@ -37,9 +37,9 @@ export const DEFAULT_SETTINGS = {
   cover: 'pages',        // 'pages'    : the first and last printed pages ARE the covers
                          // 'separate' : a separate cover is wrapped around the printed block
   coverBlanksFront: 1,   // separate cover: blank pages (faces) between the front cover and page 1,
-  coverBlanksBack: 1,    // and between the last page and the back cover. Both count the inside of
-                         // the cover. Physically always odd: printed leaves can't be split, so
-                         // page 1 stays on the front of a leaf (an even number is rounded up).
+  coverBlanksBack: 1,    // and between the last page and the back cover; both count the inside of
+                         // the cover. An even front count shifts every page to the other side of its
+                         // leaf (what a print shop that re-arranges the pages would produce).
 };
 
 export const PRESETS = {
@@ -186,8 +186,8 @@ export function buildBook(images, settings) {
 
   // A leaf that is not printed by this job (cover / blank). Faces map to an upright
   // label: recto as is; verso mirrored across the spine, as it is seen once turned.
-  function synthLeaf(rectoLabel, versoLabel, kind) {
-    const face = (label, isVerso) => {
+  function synthFace(label, kind, isVerso) {
+    {
       // (sN,tN) -> page uv with v up, page read upright from the front
       let o, ds, dt;
       if (binding === 'left') { o = [0, 0]; ds = [1, 0]; dt = [0, 1]; }
@@ -200,9 +200,8 @@ export function buildBook(images, settings) {
         ds = mirrorU ? [-ds[0], ds[1]] : [ds[0], -ds[1]];
         dt = mirrorU ? [-dt[0], dt[1]] : [dt[0], -dt[1]];
       }
-      return { img: -1, label, kind, sheet: -1, side: null, o, ds, dt };
-    };
-    return { recto: face(rectoLabel, false), verso: face(versoLabel, true), sheet: -1, part: kind, synthetic: true };
+      return { img: -1, label, kind, sheet: -1, side: null, part: kind, o, ds, dt };
+    }
   }
 
   // A leaf is a region of a sheet, described by (s,t) -> sheet (x,y) and which sheet
@@ -215,7 +214,7 @@ export function buildBook(images, settings) {
       const p = (sN, tN) => { const [x, y] = toSheet(sN * Ls, tN * Lt); return uvAt(side, x, y); };
       const o = p(0, 0), ps = p(1, 0), pt = p(0, 1);
       return {
-        img, sheet: sheet.index, side,
+        img, sheet: sheet.index, side, part: label,
         // uv = o + sN*(ps-o) + tN*(pt-o)
         o, ds: [ps[0] - o[0], ps[1] - o[1]], dt: [pt[0] - o[0], pt[1] - o[1]],
       };
@@ -262,22 +261,45 @@ export function buildBook(images, settings) {
       for (const sh of sheets) leaves.push(makeLeaf(sh, B, 'front', otherName + ' half'));
     }
   }
-  // Separate cover: wrap the printed block in a cover leaf plus blank leaves, front and back.
-  // These are not printed by this job, so their faces carry a label instead of an image.
-  let extraLeaves = 0;
+  // Separate cover: lay the book out as a sequence of pages (cover, blanks, your pages, blanks,
+  // cover) and pair them into leaves. Cover and blank pages are not printed by this job, so
+  // they carry a label instead of an image. With an even number of front blanks every page of
+  // yours lands on the other side of a leaf, as if a print shop had re-arranged the pages.
+  let cover = null;
   if (st.cover === 'separate') {
-    const front = [synthLeaf('Front cover', 'Inside front cover', 'cover')];
-    const back = [synthLeaf('Inside back cover', 'Back cover', 'cover')];
-    const nFront = (coverBlanksOdd(st.coverBlanksFront) - 1) / 2, nBack = (coverBlanksOdd(st.coverBlanksBack) - 1) / 2;
-    for (let i = 0; i < nFront; i++) front.push(synthLeaf('Blank', 'Blank', 'blank'));
-    for (let i = 0; i < nBack; i++) back.unshift(synthLeaf('Blank', 'Blank', 'blank'));
-    extraLeaves = front.length + back.length;
-    leaves.unshift(...front);
-    leaves.push(...back);
+    const F = Math.max(1, Math.round(st.coverBlanksFront || 1));
+    const B0 = Math.max(1, Math.round(st.coverBlanksBack || 1));
+    const pages = [];
+    for (const l of leaves) pages.push({ face: l.recto, verso: false }, { face: l.verso, verso: true });
+    const pad = (2 + F + B0 + pages.length) % 2; // every leaf has two sides
+    const B = B0 + pad;
+    const lab = (label, kind) => ({ label, kind });
+    const seq = [lab('Front cover', 'cover'), lab('Inside front cover', 'cover')];
+    for (let i = 1; i < F; i++) seq.push(lab('Blank', 'blank'));
+    seq.push(...pages);
+    for (let i = 1; i < B; i++) seq.push(lab('Blank', 'blank'));
+    seq.push(lab('Inside back cover', 'cover'), lab('Back cover', 'cover'));
+    const toFace = (p, asVerso) => {
+      if (p.label) return synthFace(p.label, p.kind, asVerso);
+      if (p.verso === asVerso) return p.face;
+      // On the other side of a leaf the page is seen mirrored across the spine:
+      // uv(sN) -> uv(1 - sN), so it still reads the right way up.
+      const f = p.face;
+      return { ...f, o: [f.o[0] + f.ds[0], f.o[1] + f.ds[1]], ds: [-f.ds[0], -f.ds[1]] };
+    };
+    const paired = [];
+    for (let i = 0; i < seq.length; i += 2) {
+      const recto = toFace(seq[i], false), verso = toFace(seq[i + 1], true);
+      const synthetic = !!(seq[i].label && seq[i + 1].label);
+      paired.push({ recto, verso, sheet: recto.sheet >= 0 ? recto.sheet : verso.sheet, part: recto.part || verso.part, synthetic });
+    }
+    leaves.length = 0;
+    leaves.push(...paired);
+    cover = { front: F, back: B, backRequested: B0, padded: pad === 1, shifted: F % 2 === 0, addedPages: seq.filter((p) => p.label).length };
   }
   leaves.forEach((l, i) => (l.index = i));
 
-  return { leaves, sheets, W, H, Ls, Lt, binding, layout, split, flipped, flipAxis, paper, settings: st, extraLeaves };
+  return { leaves, sheets, W, H, Ls, Lt, binding, layout, split, flipped, flipAxis, paper, settings: st, cover };
 }
 
 /** uv for normalized leaf coords */

@@ -1,4 +1,4 @@
-import { buildBook, DEFAULT_SETTINGS, PRESETS, PAPER_SIZES, allowedBindings, halfNames, migrateSettings, coverBlanksOdd, pageNumber } from './binding.js';
+import { buildBook, DEFAULT_SETTINGS, PRESETS, PAPER_SIZES, allowedBindings, halfNames, migrateSettings, pageNumber } from './binding.js';
 import { Book3D } from './book3d.js';
 import { THEMES } from './scenery.js';
 import { SpreadsView, SheetsView, describeFace } from './views2d.js';
@@ -170,7 +170,7 @@ function summarize(book) {
   const blankFaces = book.leaves.reduce((n, l) => n + (l.recto.img < 0) + (l.verso.img < 0), 0);
   const sigs = s.layout === 'fold' ? (s.sheetsPerSignature > 0 ? Math.ceil(book.sheets.length / s.sheetsPerSignature) : 1) : 0;
   const [h1, h2] = halfNames(book.split);
-  const firstHalf = book.leaves[0]?.part.split(' ')[0];
+  const firstHalf = firstContentHalf(book);
   const otherHalf = firstHalf === h1 ? h2 : h1;
   const spineVertical = book.binding === 'left' || book.binding === 'right';
   const pageW = Math.round(spineVertical ? book.Ls : book.Lt), pageH = Math.round(spineVertical ? book.Lt : book.Ls);
@@ -186,15 +186,21 @@ function summarize(book) {
       : s.cutOrder === 'stack' ? `${N} leaves, ${firstHalf} half-stack on top of ${otherHalf}`
         : `${N} leaves, each sheet ${firstHalf} half then ${otherHalf} half`,
   }[book.layout];
-  const firstSide = { left: 'right-hand', right: 'left-hand', top: 'lower', bottom: 'upper' }[book.binding];
-  if (s.cover === 'separate') {
-    const nf = coverBlanksOdd(s.coverBlanksFront), nbk = coverBlanksOdd(s.coverBlanksBack);
+  const rectoSide = { left: 'right-hand', right: 'left-hand', top: 'lower', bottom: 'upper' }[book.binding];
+  const versoSide = { left: 'left-hand', right: 'right-hand', top: 'upper', bottom: 'lower' }[book.binding];
+  if (book.cover) {
+    const c = book.cover;
     const pl = (n) => `${n} blank page${n > 1 ? 's' : ''}`;
-    $('#out4c').textContent = `→ front cover, ${pl(nf)}, your page 1 on a ${firstSide} page (book p${nf + 2}) … your last page, ${pl(nbk)}, back cover`;
-    // An even count would put page 1 on the back of a leaf: printed sheets can't be split.
-    const bad = [['front', s.coverBlanksFront, nf], ['back', s.coverBlanksBack, nbk]].filter(([, want, got]) => Math.max(1, Math.round(want || 1)) !== got);
-    $('#coverwarn').innerHTML = bad.map(([where, want, got]) =>
-      `<div class="warnline">${where[0].toUpperCase() + where.slice(1)}: ${want} can't be done. Each blank leaf adds 2 pages and the inside of the cover is 1, so it's always odd; using ${got}. An even number would push your pages by one and split every two-page image.</div>`).join('');
+    $('#out4c').textContent = `→ front cover, ${pl(c.front)}, your page 1 on a ${c.shifted ? versoSide : rectoSide} page (book p${c.front + 2}) … your last page, ${pl(c.back)}, back cover`;
+    const warns = [];
+    if (c.shifted) {
+      warns.push(`Front: ${c.front} is even, so your page 1 lands on the back of a leaf (a ${versoSide} page). Every page moves to the other side of its leaf: pages that faced each other end up back to back, and two-page images get split. ` +
+        `Your printed sheets can't be bound like this as they are; it happens when the print shop re-arranges your pages. The 3D book shows that result.`);
+    }
+    if (c.padded) {
+      warns.push(`Every leaf has two sides, so the page count must be even: one more blank page goes before the back cover (${c.back} instead of ${c.backRequested}).`);
+    }
+    $('#coverwarn').innerHTML = warns.map((w) => `<div class="warnline">${w}</div>`).join('');
   } else {
     $('#out4c').textContent = `→ your first page is the front cover, your last page is the back cover`;
     $('#coverwarn').innerHTML = '';
@@ -205,8 +211,8 @@ function summarize(book) {
 
   $('#summary').innerHTML = [
     `${imgs.length} images → ${book.sheets.length} printed sheets → ${N * 2} pages` +
-      (book.extraLeaves ? ` incl. the cover and ${book.extraLeaves * 2 - 2} added blank pages` : '') +
-      (blankFaces - book.extraLeaves * 2 > 0 ? ` (${blankFaces - book.extraLeaves * 2} unprinted)` : ''),
+      (book.cover ? ` incl. the cover and ${book.cover.addedPages - 2} added blank pages` : '') +
+      (blankFaces - (book.cover ? book.cover.addedPages : 0) > 0 ? ` (${blankFaces - (book.cover ? book.cover.addedPages : 0)} unprinted)` : ''),
   ].map((l) => `<div>${l}</div>`).join('');
 
   const warns = [];
@@ -226,13 +232,18 @@ function summarize(book) {
     : '<div class="ok">✓ No problems detected</div>';
 }
 
+// Which half ("left", "right", ...) your page 1 comes from, skipping any separate cover.
+function firstContentHalf(book) {
+  for (const l of book.leaves) for (const f of [l.recto, l.verso]) if (f.sheet >= 0) return (f.part || '').split(' ')[0];
+  return '';
+}
+
 // Step 3: say in plain words how to physically assemble the sheets, then show where the
 // pages of the first sheets end up (computed from the real imposition, so it is exact).
 function explainAssembly(book) {
   const s = book.settings;
   const nSheets = book.sheets.length;
-  const content = book.leaves.filter((l) => !l.synthetic);
-  const firstHalf = (content[0]?.part || '').split(' ')[0];
+  const firstHalf = firstContentHalf(book);
   const [h1, h2] = halfNames(book.split);
   const otherHalf = firstHalf === h1 ? h2 : h1;
   const line = book.split === 'vertical' ? 'vertical (left | right)' : 'horizontal (top / bottom)';
@@ -262,7 +273,7 @@ function explainAssembly(book) {
   book.leaves.forEach((l, k) => {
     for (const [face, verso] of [[l.recto, false], [l.verso, true]]) {
       if (face.sheet < 0) continue;
-      const half = book.layout === 'single' ? '' : ' ' + l.part.split(' ')[0];
+      const half = book.layout === 'single' ? '' : ' ' + (face.part || '').split(' ')[0];
       if (!bySheet.has(face.sheet)) bySheet.set(face.sheet, []);
       bySheet.get(face.sheet).push({ p: pageNumber(k, verso), what: face.side + half });
     }

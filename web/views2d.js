@@ -53,7 +53,7 @@ export function describeFace(book, source, face, leafIndex, isVerso) {
   const p = pageNumber(leafIndex, isVerso);
   if (face.label) return `p${p} — ${face.label}${face.kind === 'blank' ? ' page (added)' : ' (separate cover)'}`;
   const name = face.img >= 0 ? source.images[face.img].name : '(blank)';
-  return `p${p} — sheet ${face.sheet + 1} ${face.side}${book.layout !== 'single' ? ', ' + book.leaves[leafIndex].part : ''} — ${name}`;
+  return `p${p} — sheet ${face.sheet + 1} ${face.side}${book.layout !== 'single' ? ', ' + (face.part || book.leaves[leafIndex].part) : ''} — ${name}`;
 }
 
 /** Grid of every spread, drawn lazily as it scrolls into view. */
