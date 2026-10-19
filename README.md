@@ -8,7 +8,40 @@ Preview how a folder of page images will look once printed and bound, before you
 * **All spreads**: every spread drawn at once from thumbnails. Click one to open it in 3D.
 * **Printer sheets**: the raw sheet fronts and backs as they come out of the printer.
 
-## Run
+## Run: portable app (no install, no Docker)
+
+Download `PrintBindingSim-windows-x64.zip` or `PrintBindingSim-linux-x64.tar.gz` from the [Releases](https://github.com/yonixw/PrintBindingSim/releases), unpack it anywhere, and run `PrintBindingSim.exe` (Windows) or `./PrintBindingSim` (Linux).
+Your browser opens at http://localhost:8080; close the console window to stop.
+
+* Nothing is installed, no admin rights are needed, and nothing is unpacked to temp. Everything lives in that folder:
+  `_internal/` (Python, Pillow, PDFium, the web app) and `data/` (your uploads and the cache), created on first run.
+* Unpack it somewhere writable (not `C:\Program Files`). Delete the folder to remove it completely.
+* The Linux build runs on glibc 2.31+ (Ubuntu 20.04+, Debian 11+), and Python is not needed.
+* Environment overrides: `PORT`, `DATA_DIR`, `NO_BROWSER=1`.
+
+Build it yourself (each OS builds its own):
+
+```bash
+pip install -r packaging/requirements-build.txt
+python packaging/build.py          # -> dist/PrintBindingSim/ and an archive
+sh packaging/build-linux.sh        # Linux build via Docker, also works from Windows
+```
+
+Pushing a tag like `v1.0.0` builds both on GitHub Actions and attaches them to a Release.
+
+## No GPU?
+
+The 3D view needs WebGL. On a machine without a GPU (e.g. a VM over remote desktop), the browser may fall back to software rendering, which is slower but works, since the app only redraws when something changes.
+If WebGL is not available at all, the app tells you and opens **All spreads** instead; the 2D views always work.
+To enable software WebGL in Chrome or Edge, or to test this on your own machine:
+
+```bash
+chrome.exe --disable-gpu --enable-unsafe-swiftshader --user-data-dir=%TEMP%\chrome-nogpu http://localhost:8080
+```
+
+Check `chrome://gpu`: WebGL should say "Software only". Leave out `--enable-unsafe-swiftshader` to see the no-WebGL fallback.
+
+## Run with Docker
 
 ```bash
 docker compose up --build

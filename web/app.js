@@ -6,7 +6,7 @@ import { fetchFolders, openServerFolder, LocalSource, loadServerSettings, saveSe
 const $ = (s) => document.querySelector(s);
 const state = { source: null, book: null, settings: { ...DEFAULT_SETTINGS }, view: 'v3d', folderKey: null };
 let book3d = null;
-const spreads = new SpreadsView($('#vspreads'), (i) => { showView('v3d'); book3d.goTo(i); });
+const spreads = new SpreadsView($('#vspreads'), (i) => { if (!book3d) return; showView('v3d'); book3d.goTo(i); });
 const sheets = new SheetsView($('#vsheets'));
 
 // ---------- settings form ----------
@@ -117,18 +117,42 @@ function persist() {
   if (state.source && state.source.path !== undefined) saveServerSettings(state.source.path, state.settings);
 }
 
+// ---------- WebGL check ----------
+// Without WebGL (e.g. a VM with no GPU and no software fallback) the 3D view can't run,
+// but the 2D views (plain canvas) still work.
+function webglAvailable() {
+  try {
+    const c = document.createElement('canvas');
+    return !!(c.getContext('webgl2') || c.getContext('webgl'));
+  } catch { return false; }
+}
+let HAS_WEBGL = webglAvailable();
+function noWebGL() {
+  HAS_WEBGL = false;
+  $('#no3d').classList.remove('hide');
+  $('#help').classList.add('hide');
+  if (state.view === 'v3d') showView('vspreads');
+}
+
 // ---------- book ----------
 function rebuild(keepSpread) {
   if (!state.source) return;
   const book = buildBook(state.source.images, state.settings);
   state.book = book;
-  if (!book3d) {
-    book3d = new Book3D($('#v3d'), state.source, { preload: $('#preload').value });
-    book3d.onChange = updatePos;
+  if (!book3d && HAS_WEBGL) {
+    try {
+      book3d = new Book3D($('#v3d'), state.source, { preload: $('#preload').value });
+      book3d.onChange = updatePos;
+    } catch (e) {
+      console.error(e);
+      noWebGL();
+    }
   }
-  book3d.source = state.source;
-  book3d.setBook(book, keepSpread);
-  if (state.keepCur !== undefined) { book3d.goTo(state.keepCur, false); state.keepCur = undefined; }
+  if (book3d) {
+    book3d.source = state.source;
+    book3d.setBook(book, keepSpread);
+    if (state.keepCur !== undefined) { book3d.goTo(state.keepCur, false); state.keepCur = undefined; }
+  }
   $('#slider').max = book.leaves.length;
   summarize(book);
   if (state.view === 'vspreads') spreads.render(book, state.source);
@@ -404,4 +428,5 @@ $('#localdir').onchange = async (e) => {
   await useSource(src, 'local:' + dir, null);
 };
 
+if (!HAS_WEBGL) noWebGL();
 loadFolders();

@@ -66,6 +66,7 @@ export class Book3D {
   }
 
   resize() {
+    this.dirty = true;
     const w = this.container.clientWidth || 1, h = this.container.clientHeight || 1;
     this.renderer.setSize(w, h, false);
     this.renderer.domElement.style.width = '100%';
@@ -242,12 +243,14 @@ export class Book3D {
     }
     for (const m of [o.rec, o.ver]) {
       m.geometry.attributes.position.needsUpdate = true;
+      this.dirty = true;
       m.geometry.computeVertexNormals();
       m.geometry.computeBoundingSphere();
     }
   }
 
   _updateBlocks() {
+    this.dirty = true;
     const { Ls, Lt } = this.book;
     const N = this.leafObjs.length, th = this.th;
     // resting leaves on each side (ignoring animating ones)
@@ -355,6 +358,7 @@ export class Book3D {
     else this.camera.position.set(0, -Math.sin(0.5) * dist * 1.1, Math.cos(0.5) * dist * 1.1);
     this.camera.lookAt(0, 0, 0);
     this.controls.update();
+    this.dirty = true;
   }
 
   _bindPointer() {
@@ -390,8 +394,13 @@ export class Book3D {
       }
       if (done) { this._updateBlocks(); this._updateTextures(); }
     }
-    this.controls.update();
-    this.renderer.render(this.scene, this.camera);
+    // Draw only when something changed (camera, pages, textures): idle costs ~nothing,
+    // which matters with software rendering on GPU-less machines.
+    const moved = this.controls.update();
+    if (moved || this.dirty || this.anims.size) {
+      this.renderer.render(this.scene, this.camera);
+      this.dirty = false;
+    }
   }
 
   // ---------- textures ----------
@@ -467,6 +476,7 @@ export class Book3D {
   }
 
   _refreshMat(i) {
+    this.dirty = true;
     const full = this.tex.full.get(i), lo = this.tex.lo.get(i);
     const t = full && full !== 'pending' ? full : lo && lo !== 'pending' ? lo : null;
     if (!this.mats.has(i)) this.mats.set(i, new THREE.MeshLambertMaterial({ color: 0xffffff }));

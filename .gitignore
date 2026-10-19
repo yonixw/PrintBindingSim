@@ -9,3 +9,7 @@ __pycache__/
 # Uploads from the UI (when BOOKS_DIR is this folder)
 pdf/
 img/
+# Portable builds
+dist/
+build/
+.venv-build/

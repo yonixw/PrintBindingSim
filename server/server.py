@@ -1,9 +1,11 @@
 """PrintBindingSim server: browses a data folder, serves page images + cached thumbnails.
 
 Dependencies besides the stdlib: Pillow, and pypdfium2 for PDFs.
-  DATA_DIR   folder containing your page-image folders and PDFs (default /data)
-  CACHE_DIR  thumbnail + settings cache (default /cache)
-  PORT       default 8080
+  DATA_DIR   folder containing your page-image folders and PDFs
+             (default /data; portable build: ./data next to the executable)
+  CACHE_DIR  thumbnail + settings cache (default /cache; portable: <DATA_DIR>/.cache)
+  PORT       default 8080 (portable build: the next free port if 8080 is taken)
+  NO_BROWSER set to 1 to not open a browser on start (portable build only)
 
 A PDF is treated like a folder of images: page i is image i. Pages are rendered on
 demand (and in the background) straight from the PDF; nothing is split up front.
@@ -19,6 +21,7 @@ import re
 import shutil
 import sys
 import threading
+import webbrowser
 from collections import namedtuple
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -31,9 +34,14 @@ import pdfwork
 
 Image.MAX_IMAGE_PIXELS = None
 
-DATA_DIR = Path(os.environ.get("DATA_DIR", "/data")).resolve()
-CACHE_DIR = Path(os.environ.get("CACHE_DIR", "/cache")).resolve()
-WEB_DIR = Path(os.environ.get("WEB_DIR", Path(__file__).resolve().parent.parent / "web")).resolve()
+# Portable build (PyInstaller one-folder): bundled files live in sys._MEIPASS, user data
+# goes next to the executable. Docker / dev: /data and /cache.
+FROZEN = getattr(sys, "frozen", False)
+APP_DIR = Path(sys.executable).resolve().parent if FROZEN else Path(__file__).resolve().parent.parent
+BUNDLE_DIR = Path(getattr(sys, "_MEIPASS", APP_DIR))
+DATA_DIR = Path(os.environ.get("DATA_DIR", APP_DIR / "data" if FROZEN else "/data")).resolve()
+CACHE_DIR = Path(os.environ.get("CACHE_DIR", DATA_DIR / ".cache" if FROZEN else "/cache")).resolve()
+WEB_DIR = Path(os.environ.get("WEB_DIR", BUNDLE_DIR / "web")).resolve()
 PORT = int(os.environ.get("PORT", "8080"))
 WORKERS = max(2, (os.cpu_count() or 2) - 1)
 
@@ -436,8 +444,31 @@ class Handler(SimpleHTTPRequestHandler):
 mimetypes.add_type("text/javascript", ".js")
 mimetypes.add_type("text/css", ".css")
 
-if __name__ == "__main__":
-    print(f"PrintBindingSim: data={DATA_DIR} cache={CACHE_DIR} web={WEB_DIR}")
-    print(f"Open http://localhost:{PORT}")
+def make_server():
     ThreadingHTTPServer.daemon_threads = True
-    ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
+    # Portable: if the port is taken (e.g. a second copy), use the next free one.
+    for port in range(PORT, PORT + (20 if FROZEN else 1)):
+        try:
+            return ThreadingHTTPServer(("0.0.0.0", port), Handler), port
+        except OSError:
+            if port == PORT + (19 if FROZEN else 0):
+                raise
+    raise OSError("no free port")
+
+
+if __name__ == "__main__":
+    multiprocessing.freeze_support()  # PDF worker processes inside the packed executable
+    (DATA_DIR / IMG_DIR).mkdir(parents=True, exist_ok=True)
+    (DATA_DIR / PDF_DIR).mkdir(parents=True, exist_ok=True)
+    httpd, port = make_server()
+    url = f"http://localhost:{port}"
+    print(f"PrintBindingSim: data={DATA_DIR} cache={CACHE_DIR} web={WEB_DIR}", flush=True)
+    print(f"Open {url}", flush=True)
+    if FROZEN:
+        print("Close this window to stop the server.", flush=True)
+        if os.environ.get("NO_BROWSER") != "1":
+            threading.Timer(0.8, webbrowser.open, args=[url]).start()
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        pass

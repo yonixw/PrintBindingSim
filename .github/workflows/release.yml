@@ -1,0 +1,54 @@
+# Build the portable Windows and Linux apps. On a version tag (v1.2.3) they are attached
+# to a GitHub Release; on a manual run they are kept as workflow artifacts.
+name: Portable builds
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r packaging/requirements-build.txt
+      - run: python packaging/build.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PrintBindingSim-windows-x64
+          path: dist/PrintBindingSim-windows-x64.zip
+
+  linux:
+    runs-on: ubuntu-latest
+    # Old glibc (2.31) so the binary runs on most distros
+    container: python:3.12-slim-bullseye
+    steps:
+      - uses: actions/checkout@v4
+      - run: apt-get update -qq && apt-get install -y -qq binutils
+      - run: pip install -r packaging/requirements-build.txt
+      - run: python packaging/build.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PrintBindingSim-linux-x64
+          path: dist/PrintBindingSim-linux-x64.tar.gz
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true

@@ -111,6 +111,14 @@
   <div id="views">
     <div id="v3d" class="view on">
       <div id="hud"></div>
+      <div id="no3d" class="no3d hide">
+        <h3>3D view unavailable: this browser has no WebGL</h3>
+        <p>This usually means there's no GPU (for example a VM over remote desktop) and the browser's software fallback is off.
+          The <b>All spreads</b> and <b>Printer sheets</b> views still work.</p>
+        <p>To enable software 3D in Chrome or Edge, start it with:</p>
+        <code>--enable-unsafe-swiftshader</code>
+        <p class="muted">Check <code>chrome://gpu</code>: WebGL should say "Software only".</p>
+      </div>
       <div id="help" class="muted">Drag: rotate · Right-drag: pan · Wheel: zoom · Click page / ← →: flip</div>
     </div>
     <div id="vspreads" class="view grid"></div>

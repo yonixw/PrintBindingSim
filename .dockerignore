@@ -7,3 +7,6 @@ web/vendor
 .claude
 pdf
 img
+dist
+build
+.venv-build
