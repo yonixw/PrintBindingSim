@@ -12,6 +12,8 @@ Preview how a folder of page images will look once printed and bound, before you
 
 ![The four scenes](docs/scenes.jpg)
 
+Presets include **Adobe PDF booklet**, for a PDF made with Acrobat's *Print → Booklet* (printed to PDF). Each PDF page is one sheet side with two pages, already in booklet order.
+
 URL options, handy for links: `?theme=pirate|library|cyber|fairy|none`, `?spread=12` (open at a spread), `?zoom=1.5` (start further out), `?software=1|0` (force software-rendering mode on or off).
 
 ## Run: portable app (no install, no Docker)
@@ -85,7 +87,7 @@ Settings are applied in this order:
 | After cutting (cut) | **Close like a book**: lay the two half-stacks open side by side, then close the book (same page order as a nested booklet). **One half-stack on top of the other**: pick which half goes on top. **Keep each sheet's halves together**: the two halves of each sheet stay next to each other. |
 | Duplex flip long/short edge | The printer-driver setting. The back side is rotated about an axis parallel to that edge of the paper. |
 | Spine | The binding edge of the finished book: right = manga / right-to-left. |
-| Cover | **The covers**: your first and last printed pages are the front and back cover. **Inside a separate cover**: a cover is wrapped around the printed block, with N blank pages between the cover and page 1 (the same at the back). N is always odd (the inside of the cover plus 2 per blank leaf), because printed leaves cannot be split. That keeps two-page images facing each other. |
+| Start from cover? | **Yes**: your first and last printed pages are the front and back cover. **No**: a separate cover goes around the printed pages, with blank pages (faces) between it and your pages, set separately for the front and the back, counting the inside of the cover. These counts are always odd, because printed leaves can't be split (page 1 stays on the front of a leaf, which keeps two-page images facing each other); an even number is rounded up, with a warning. |
 
 When the flip edge doesn't match the fold or spine, a warning appears, and the 3D book shows the backs upside down, just as the real print would.
 

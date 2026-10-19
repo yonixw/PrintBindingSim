@@ -36,12 +36,17 @@ export const DEFAULT_SETTINGS = {
   thickness: 0.1,        // paper thickness, mm
   cover: 'pages',        // 'pages'    : the first and last printed pages ARE the covers
                          // 'separate' : a separate cover is wrapped around the printed block
-  coverBlanks: 1,        // separate cover: blank pages between the cover and the first page
-                         // (same at the back). Always odd: the inside of the cover is one, every
-                         // extra blank leaf adds two, because printed leaves cannot be split.
+  coverBlanksFront: 1,   // separate cover: blank pages (faces) between the front cover and page 1,
+  coverBlanksBack: 1,    // and between the last page and the back cover. Both count the inside of
+                         // the cover. Physically always odd: printed leaves can't be split, so
+                         // page 1 stays on the front of a leaf (an even number is rounded up).
 };
 
 export const PRESETS = {
+  // Acrobat: Print -> Booklet (printed to PDF). Each PDF page is one landscape sheet side
+  // holding two pages, already in saddle-stitch order, covers included.
+  'Adobe PDF booklet (Acrobat Print → Booklet, binding Left)': { rotate: 0, duplex: true, flip: 'short', layout: 'fold', split: 'vertical', sheetsPerSignature: 0, binding: 'left', cover: 'pages' },
+  'Adobe PDF booklet (Acrobat Print → Booklet, binding Right)': { rotate: 0, duplex: true, flip: 'short', layout: 'fold', split: 'vertical', sheetsPerSignature: 0, binding: 'right', cover: 'pages' },
   'Booklet, left-to-right (saddle stitch)': { duplex: true, flip: 'short', layout: 'fold', split: 'vertical', sheetsPerSignature: 0, binding: 'left' },
   'Booklet, right-to-left / manga (saddle stitch)': { duplex: true, flip: 'short', layout: 'fold', split: 'vertical', sheetsPerSignature: 0, binding: 'right' },
   'Folded sheets stacked (each sheet its own signature), RTL': { duplex: true, flip: 'short', layout: 'fold', split: 'vertical', sheetsPerSignature: 1, binding: 'right' },
@@ -62,6 +67,11 @@ export function migrateSettings(s) {
     else { s.layout = 'fold'; s.split = s.fold; }
   }
   delete s.fold;
+  if (s.coverBlanks !== undefined) {
+    if (s.coverBlanksFront === undefined) s.coverBlanksFront = s.coverBlanks;
+    if (s.coverBlanksBack === undefined) s.coverBlanksBack = s.coverBlanks;
+    delete s.coverBlanks;
+  }
   delete s.skipFirst;
   delete s.blankBefore;
   return s;
@@ -256,14 +266,12 @@ export function buildBook(images, settings) {
   // These are not printed by this job, so their faces carry a label instead of an image.
   let extraLeaves = 0;
   if (st.cover === 'separate') {
-    const blankLeaves = Math.max(0, Math.floor((coverBlanksOdd(st.coverBlanks) - 1) / 2));
     const front = [synthLeaf('Front cover', 'Inside front cover', 'cover')];
     const back = [synthLeaf('Inside back cover', 'Back cover', 'cover')];
-    for (let i = 0; i < blankLeaves; i++) {
-      front.push(synthLeaf('Blank', 'Blank', 'blank'));
-      back.unshift(synthLeaf('Blank', 'Blank', 'blank'));
-    }
-    extraLeaves = front.length;
+    const nFront = (coverBlanksOdd(st.coverBlanksFront) - 1) / 2, nBack = (coverBlanksOdd(st.coverBlanksBack) - 1) / 2;
+    for (let i = 0; i < nFront; i++) front.push(synthLeaf('Blank', 'Blank', 'blank'));
+    for (let i = 0; i < nBack; i++) back.unshift(synthLeaf('Blank', 'Blank', 'blank'));
+    extraLeaves = front.length + back.length;
     leaves.unshift(...front);
     leaves.push(...back);
   }

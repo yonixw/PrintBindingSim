@@ -71,17 +71,17 @@
 
     <section class="step">
       <header><span class="num">4</span><h2>Cover</h2></header>
-      <div class="field"><span class="lbl">The first and last printed pages are</span>
-        <div class="seg" data-k="cover"><button value="pages">The covers</button><button value="separate">Inside a separate cover</button></div></div>
-      <label class="when-separate">Blank pages between cover and first page <span class="muted">(same at the back)</span>
-        <select data-k="coverBlanks">
-          <option value="1">1 — just the inside of the cover</option>
-          <option value="3">3 — inside of cover + 1 blank leaf</option>
-          <option value="5">5 — inside of cover + 2 blank leaves</option>
-          <option value="7">7 — inside of cover + 3 blank leaves</option>
-          <option value="9">9 — inside of cover + 4 blank leaves</option>
-        </select>
-        <span class="muted">Always odd: your printed leaves can't be split, so page 1 stays on the front of a leaf and two-page images stay facing each other.</span></label>
+      <div class="field"><span class="lbl">Start from cover?</span>
+        <div class="seg" data-k="cover"><button value="pages" title="Your first printed page is the front cover, your last is the back cover">Yes</button><button value="separate" title="A separate cover goes around your printed pages">No, separate cover</button></div></div>
+      <div class="muted when-pages">Your first printed page is the front cover; your last printed page is the back cover.</div>
+      <div class="when-separate">
+        <div class="muted">A separate cover goes around your printed pages. Count the blank pages (faces) between it and your pages, including the inside of the cover.</div>
+        <div class="row2">
+          <label>Blank pages at the front <input data-k="coverBlanksFront" type="number" min="1" step="1" value="1"></label>
+          <label>Blank pages at the back <input data-k="coverBlanksBack" type="number" min="1" step="1" value="1"></label>
+        </div>
+        <div id="coverwarn"></div>
+      </div>
       <div class="out" id="out4c"></div>
     </section>
 

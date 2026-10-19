@@ -58,6 +58,7 @@ function syncFormEnabled(s) {
   show('.when-cutfirst', s.layout === 'cut' && s.cutOrder !== 'book');
   show('.when-duplex', s.duplex);
   show('.when-separate', s.cover === 'separate');
+  show('.when-pages', s.cover !== 'separate');
   const names = halfNames(s.split);
   const cf = $('#cutFirst');
   if (cf.dataset.split !== s.split) {
@@ -187,10 +188,16 @@ function summarize(book) {
   }[book.layout];
   const firstSide = { left: 'right-hand', right: 'left-hand', top: 'lower', bottom: 'upper' }[book.binding];
   if (s.cover === 'separate') {
-    const nb = coverBlanksOdd(s.coverBlanks);
-    $('#out4c').textContent = `→ cover, then ${nb} blank page${nb > 1 ? 's' : ''}, then your page 1 on a ${firstSide} page (book p${nb + 2}); mirrored at the back`;
+    const nf = coverBlanksOdd(s.coverBlanksFront), nbk = coverBlanksOdd(s.coverBlanksBack);
+    const pl = (n) => `${n} blank page${n > 1 ? 's' : ''}`;
+    $('#out4c').textContent = `→ front cover, ${pl(nf)}, your page 1 on a ${firstSide} page (book p${nf + 2}) … your last page, ${pl(nbk)}, back cover`;
+    // An even count would put page 1 on the back of a leaf: printed sheets can't be split.
+    const bad = [['front', s.coverBlanksFront, nf], ['back', s.coverBlanksBack, nbk]].filter(([, want, got]) => Math.max(1, Math.round(want || 1)) !== got);
+    $('#coverwarn').innerHTML = bad.map(([where, want, got]) =>
+      `<div class="warnline">${where[0].toUpperCase() + where.slice(1)}: ${want} can't be done. Each blank leaf adds 2 pages and the inside of the cover is 1, so it's always odd; using ${got}. An even number would push your pages by one and split every two-page image.</div>`).join('');
   } else {
     $('#out4c').textContent = `→ your first page is the front cover, your last page is the back cover`;
+    $('#coverwarn').innerHTML = '';
   }
   explainAssembly(book);
   const reads = { left: 'reads left → right', right: 'reads right → left', top: 'flips up', bottom: 'flips down' }[book.binding];
@@ -198,8 +205,8 @@ function summarize(book) {
 
   $('#summary').innerHTML = [
     `${imgs.length} images → ${book.sheets.length} printed sheets → ${N * 2} pages` +
-      (book.extraLeaves ? ` incl. 4 cover pages and ${(book.extraLeaves - 1) * 4} added blank pages` : '') +
-      (blankFaces - book.extraLeaves * 4 > 0 ? ` (${blankFaces - book.extraLeaves * 4} unprinted)` : ''),
+      (book.extraLeaves ? ` incl. the cover and ${book.extraLeaves * 2 - 2} added blank pages` : '') +
+      (blankFaces - book.extraLeaves * 2 > 0 ? ` (${blankFaces - book.extraLeaves * 2} unprinted)` : ''),
   ].map((l) => `<div>${l}</div>`).join('');
 
   const warns = [];
