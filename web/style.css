@@ -97,3 +97,5 @@ button.danger:hover { background: rgba(255, 123, 123, .12); border-color: var(--
 .modal .btns button { min-width: 84px; }
 .modal .yes.danger { background: #a83a3a; border-color: #c25050; color: #fff; }
 .modal .yes:not(.danger) { background: var(--accent); border-color: var(--accent); color: #0b1220; }
+h1:has(+ .version) { margin-bottom: 2px; }
+.version { margin: 0 0 10px; font-size: 11px; color: var(--muted); opacity: .8; }
